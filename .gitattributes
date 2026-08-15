@@ -1,0 +1,13 @@
+# Normalizar finales de línea: en el repo siempre LF, en Windows el checkout
+# usa CRLF. Sin esto, git avisa "LF will be replaced by CRLF" en cada archivo
+# y los diffs entre la PC y el build de Linux se ensucian.
+* text=auto eol=lf
+
+# Binarios: no tocar.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.db binary
