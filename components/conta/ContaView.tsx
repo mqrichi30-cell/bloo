@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { ChevronLeft, Plus, NotebookText } from "lucide-react";
 import { apiFetch } from "@/lib/api-client";
@@ -9,11 +9,16 @@ import { SkeletonBlock } from "@/components/ui/Skeleton";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { AsientoSheet, type CuentaLite } from "@/components/conta/AsientoSheet";
 import { CuentaSheet } from "@/components/conta/CuentaSheet";
+import { SaldosArbol } from "@/components/conta/SaldosArbol";
+import { ExportarAsientosButton } from "@/components/conta/ExportarAsientosButton";
 
 interface Cuenta extends CuentaLite {
   naturaleza: string;
   esMedioPago: boolean;
   saldoCent: number;
+  parentId: string | null;
+  tieneHijas: boolean;
+  saldoConsolidadoCent: number;
 }
 interface AsientoLinea {
   cuentaCodigo: string;
@@ -29,15 +34,6 @@ interface Asiento {
   totalCent: number;
   lineas: AsientoLinea[];
 }
-
-const TIPO_LABEL: Record<string, string> = {
-  activo: "Activo",
-  pasivo: "Pasivo",
-  patrimonio: "Patrimonio",
-  ingreso: "Ingreso",
-  gasto: "Gasto",
-};
-const TIPO_ORDER = ["activo", "pasivo", "patrimonio", "ingreso", "gasto"];
 
 const ORIGEN_LABEL: Record<string, string> = {
   pago_lote: "Pago mercadería",
@@ -63,15 +59,6 @@ export function ContaView() {
     loadCuentas();
     loadAsientos();
   }, [loadCuentas, loadAsientos]);
-
-  const cuentasByTipo = useMemo(() => {
-    const map = new Map<string, Cuenta[]>();
-    for (const c of cuentas ?? []) {
-      if (!map.has(c.tipo)) map.set(c.tipo, []);
-      map.get(c.tipo)!.push(c);
-    }
-    return TIPO_ORDER.filter((t) => map.has(t)).map((t) => [t, map.get(t)!] as const);
-  }, [cuentas]);
 
   return (
     <div className="pb-20">
@@ -106,6 +93,7 @@ export function ContaView() {
           >
             <Plus size={18} /> Nuevo asiento
           </button>
+          <ExportarAsientosButton className="mb-4" />
           {!asientos ? (
             <div className="flex flex-col gap-2">
               <SkeletonBlock variant="row" />
@@ -163,27 +151,7 @@ export function ContaView() {
               <SkeletonBlock variant="row" />
             </div>
           ) : (
-            <div className="flex flex-col gap-4">
-              {cuentasByTipo.map(([tipo, list]) => (
-                <div key={tipo}>
-                  <h2 className="mb-1.5 text-label text-ink-600">{TIPO_LABEL[tipo]}</h2>
-                  <div className="flex flex-col gap-1">
-                    {list.map((c) => (
-                      <div key={c.id} className="flex items-center justify-between gap-2 rounded-md bg-surface-alt px-3 py-2.5">
-                        <div className="min-w-0">
-                          <p className="truncate text-body text-ink-900">{c.nombre}</p>
-                          <p className="text-caption text-ink-600">
-                            {c.codigo}
-                            {c.esMedioPago ? " · medio de pago" : ""}
-                          </p>
-                        </div>
-                        <span className="shrink-0 tabular-nums text-data-md text-ink-900">{formatCRC(c.saldoCent)}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
+            <SaldosArbol cuentas={cuentas} />
           )}
         </section>
       )}
@@ -197,7 +165,12 @@ export function ContaView() {
           loadCuentas();
         }}
       />
-      <CuentaSheet open={openCuenta} onClose={() => setOpenCuenta(false)} onSaved={loadCuentas} />
+      <CuentaSheet
+        open={openCuenta}
+        onClose={() => setOpenCuenta(false)}
+        onSaved={loadCuentas}
+        cuentas={cuentas ?? []}
+      />
     </div>
   );
 }

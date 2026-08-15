@@ -321,9 +321,26 @@ model Cuenta {
   activo      Boolean @default(true)
   createdAt   DateTime @default(now())
 
+  // Subcuentas jerárquicas, profundidad MÁXIMA 1 (una hija no puede tener
+  // hijas). La cuenta madre (parentId=null, con hijas.length>0) NUNCA recibe
+  // asientos propios: su saldo se calcula SUMANDO el de sus hijas
+  // (ver lib/conta.ts#cuentasConSaldo → saldoConsolidadoCent). Esto es
+  // garantía contable, no solo de UI — si se permitiera asentar contra la
+  // madre Y sumar las hijas, el saldo se duplicaría. La garantía real vive en
+  // 2 triggers de Postgres (ver
+  // prisma/migrations/20260815010000_cuentas_jerarquia/migration.sql), porque
+  // hay asientos automáticos (origen "pago_lote" / "cobro_reserva" / futura
+  // "venta") que no pasan por el formulario manual y se saltarían cualquier
+  // chequeo hecho solo en la app. NO quitar `parentId` ni esos triggers sin
+  // entender esto primero.
+  parentId String?
+  parent   Cuenta?  @relation("CuentaJerarquia", fields: [parentId], references: [id])
+  hijas    Cuenta[] @relation("CuentaJerarquia")
+
   lineas LineaAsiento[]
 
   @@index([tipo, codigo])
+  @@index([parentId])
 }
 
 // Asiento = un movimiento contable con N líneas que CUADRAN (Σdebe = Σhaber).

@@ -15,6 +15,12 @@ export interface CuentaLite {
   codigo: string;
   nombre: string;
   tipo: string;
+  // Presente cuando la cuenta viene de cuentasConSaldo() (lib/conta.ts). Una
+  // cuenta madre (tieneHijas=true) nunca es una opción válida para asentar
+  // — el trigger `linea_asiento_validar_cuenta_hoja` la rechaza en la base
+  // (ver prisma/migrations/20260815010000_cuentas_jerarquia) — así que el
+  // selector la filtra antes de que el usuario la pueda elegir.
+  tieneHijas?: boolean;
 }
 
 interface Linea {
@@ -61,15 +67,20 @@ export function AsientoSheet({
   const diff = sumDebe - sumHaber;
   const cuadra = diff === 0 && sumDebe > 0 && lineas.every((l) => l.cuentaId && l.montoCent > 0);
 
-  const cuentaById = useMemo(() => new Map(cuentas.map((c) => [c.id, c])), [cuentas]);
+  // Réplica de lib/conta.ts#cuentasSeleccionablesParaAsiento — no se importa
+  // ese módulo acá porque arrastraría lib/prisma.ts (@prisma/client) al
+  // bundle del navegador; este componente es "use client".
+  const seleccionables = useMemo(() => cuentas.filter((c) => !c.tieneHijas), [cuentas]);
+
+  const cuentaById = useMemo(() => new Map(seleccionables.map((c) => [c.id, c])), [seleccionables]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     const list = q
-      ? cuentas.filter((c) => c.nombre.toLowerCase().includes(q) || c.codigo.includes(q))
-      : cuentas;
+      ? seleccionables.filter((c) => c.nombre.toLowerCase().includes(q) || c.codigo.includes(q))
+      : seleccionables;
     return list;
-  }, [cuentas, search]);
+  }, [seleccionables, search]);
 
   function reset() {
     setFecha(new Date().toISOString().slice(0, 10));

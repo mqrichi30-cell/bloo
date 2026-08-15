@@ -31,6 +31,10 @@ const createSchema = z.object({
   tipo: z.enum(TIPOS),
   naturaleza: z.enum(["deudora", "acreedora"]).optional(),
   esMedioPago: z.boolean().optional(),
+  // Cuenta madre para subcuentas jerárquicas (profundidad máxima 1). Una
+  // hija HEREDA tipo/naturaleza de la madre — ver más abajo, se ignora lo
+  // que venga en `tipo`/`naturaleza` cuando hay parentId.
+  parentId: z.string().uuid().nullable().optional(),
 });
 
 export async function POST(request: Request) {
@@ -41,21 +45,49 @@ export async function POST(request: Request) {
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "Datos inválidos" }, { status: 400 });
   }
-  const { codigo, nombre, tipo, esMedioPago } = parsed.data;
-  const naturaleza = parsed.data.naturaleza ?? naturalezaDeTipo(tipo);
+  const { codigo, nombre, esMedioPago } = parsed.data;
 
   const dup = await prisma.cuenta.findUnique({ where: { codigo } });
   if (dup) return NextResponse.json({ error: "Ya existe una cuenta con ese código." }, { status: 409 });
 
-  const cuenta = await prisma.cuenta.create({
-    data: { codigo, nombre, tipo, naturaleza, esMedioPago: esMedioPago ?? false },
-  });
+  let tipo = parsed.data.tipo;
+  let naturaleza = parsed.data.naturaleza ?? naturalezaDeTipo(tipo);
+  let parentId: string | null = null;
+
+  if (parsed.data.parentId) {
+    const madre = await prisma.cuenta.findUnique({ where: { id: parsed.data.parentId } });
+    if (!madre) return NextResponse.json({ error: "La cuenta madre no existe." }, { status: 400 });
+    if (madre.parentId) {
+      return NextResponse.json(
+        { error: "Esa cuenta ya es una subcuenta; no puede tener sus propias subcuentas." },
+        { status: 400 }
+      );
+    }
+    parentId = madre.id;
+    // Una hija hereda el tipo (y por lo tanto la naturaleza) de su madre —
+    // se ignora lo que haya elegido el usuario en el picker de tipo.
+    tipo = madre.tipo as (typeof TIPOS)[number];
+    naturaleza = madre.naturaleza as "deudora" | "acreedora";
+  }
+
+  let cuenta;
+  try {
+    cuenta = await prisma.cuenta.create({
+      data: { codigo, nombre, tipo, naturaleza, esMedioPago: esMedioPago ?? false, parentId },
+    });
+  } catch (err) {
+    // Backstop del trigger de Postgres (ver migración 20260815010000) por si
+    // se cuela un caso no cubierto por los chequeos de arriba.
+    console.error("cuenta.create", err);
+    return NextResponse.json({ error: "No se pudo crear la cuenta." }, { status: 400 });
+  }
+
   await writeAudit({
     userId: g.session!.userId,
     accion: "cuenta.create",
     entidad: "Cuenta",
     entidadId: cuenta.id,
-    detalle: { codigo, nombre, tipo },
+    detalle: { codigo, nombre, tipo, parentId },
   });
   return NextResponse.json({ cuenta }, { status: 201 });
 }
