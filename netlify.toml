@@ -4,6 +4,14 @@
 
 [build.environment]
   NODE_VERSION = "20"
+  # El sitio tiene NODE_ENV=production como variable de entorno (la app la usa
+  # para poner `secure` en la cookie de sesión, ver lib/session.ts). Con eso,
+  # `npm ci` se salta las devDependencies — y tailwindcss, typescript y los
+  # @types/* viven ahí, así que `next build` muere con
+  # "Cannot find module 'tailwindcss'". Esto fuerza a instalarlas igual.
+  # Antes no se notaba porque el build corría en la PC de Cris (netlify deploy
+  # --build), donde node_modules ya estaba completo.
+  NPM_FLAGS = "--include=dev"
 
 [[plugins]]
   package = "@netlify/plugin-nextjs"
