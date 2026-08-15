@@ -7,6 +7,7 @@ import { loteCreateSchema } from "@/lib/validation";
 import { deriveLoteCostoTotalCent, getTipoCambioUsdCent, computeFechaVencimientoPago } from "@/lib/lote";
 import { getAppConfig } from "@/lib/config";
 import { writeAudit } from "@/lib/audit";
+import { CUENTA_COGS, CUENTA_CXP } from "@/lib/conta";
 
 /**
  * Lote de compra de inventario: GLOBAL (no por modelo), costo pooled — ver
@@ -15,6 +16,14 @@ import { writeAudit } from "@/lib/audit";
  * envío físico se reparte entre varios modelos, se registra un lote por cada
  * reparto (simplificación deliberada; ver README).
  */
+
+class LoteError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+  }
+}
 
 export async function GET(request: Request) {
   const session = await requireValidSession();
@@ -121,6 +130,47 @@ export async function POST(request: Request) {
         data: { stockQty: { increment: unidades } },
       });
 
+      // ASIENTO AUTOMÁTICO de la compra (partida doble):
+      //   Debe  Costo de mercadería vendida (5-1-001) = costo del lote
+      //   Haber Cuentas por pagar proveedores (2-1-001)
+      // Se asienta SIEMPRE al costo histórico ya calculado arriba
+      // (`costoTotalCent`, TC vigente AL COMPRAR) — nunca se recalcula con el
+      // TC de hoy. Ese es el monto que la CxP debe reflejar como pasivo hasta
+      // que se pague (ver app/api/admin/asientos/pagar-lote/route.ts, que
+      // ahora cierra la CxP contra este mismo monto y separa el diferencial
+      // cambiario en su propia línea).
+      //
+      // GAP CONOCIDO — lote creado ya "pagado" desde LoteSheet: hoy
+      // `loteCreateSchema` no tiene un `cuentaMedioPagoId` (a diferencia de
+      // Sale), así que no hay forma de saber de qué cuenta salió la plata en
+      // el momento de crear el lote. En vez de inventar esa variante, este
+      // asiento SIEMPRE acredita CxP, incluso si `pagadoFinal` es true. Un
+      // lote que nace pagado queda con un pasivo en libros que
+      // `pagar-lote` nunca va a poder cerrar (esa ruta rechaza lotes ya
+      // marcados `pagado`). Corrección real pendiente: agregar
+      // `cuentaMedioPagoId` opcional a `loteCreateSchema` y, si viene, debitar
+      // el gasto contra esa cuenta en vez de contra CxP.
+      const cogs = await tx.cuenta.findUnique({ where: { codigo: CUENTA_COGS } });
+      const cxp = await tx.cuenta.findUnique({ where: { codigo: CUENTA_CXP } });
+      if (!cogs) throw new LoteError(`Falta la cuenta '${CUENTA_COGS}' (Costo de mercadería vendida).`, 400);
+      if (!cxp) throw new LoteError(`Falta la cuenta '${CUENTA_CXP}' (Cuentas por pagar proveedores).`, 400);
+
+      await tx.asiento.create({
+        data: {
+          fecha: fechaLote,
+          glosa: `Compra de mercadería (lote, ${unidades} u.)`,
+          origen: "compra_lote",
+          refId: lote.id,
+          userId: session.userId!,
+          lineas: {
+            create: [
+              { cuentaId: cogs.id, debeCent: costoTotalCent, haberCent: 0 },
+              { cuentaId: cxp.id, debeCent: 0, haberCent: costoTotalCent },
+            ],
+          },
+        },
+      });
+
       return lote;
     }, { maxWait: 10000, timeout: 10000 });
 
@@ -134,6 +184,9 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ lote: result }, { status: 201 });
   } catch (error) {
+    if (error instanceof LoteError) {
+      return NextResponse.json({ error: error.message }, { status: error.status });
+    }
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025") {
       return NextResponse.json({ error: "Modelo no encontrado" }, { status: 404 });
     }

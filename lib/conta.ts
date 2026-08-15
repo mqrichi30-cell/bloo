@@ -8,6 +8,20 @@ export type TipoCuenta = (typeof TIPOS)[number];
 export const CUENTA_INGRESOS = "4-1-001"; // Ingresos por ventas
 export const CUENTA_IVA = "2-1-002"; // IVA por pagar (solo si AppConfig.ivaActivo)
 
+// Decisión del dueño: el gasto de mercadería se reconoce AL COMPRAR el lote,
+// no al vender (no se capitaliza en inventario, no hay asiento de COGS por
+// venta — ver comentario en app/api/sales/route.ts). Por eso la compra debita
+// gasto directo, no una cuenta de activo. Mismo criterio que ya usó el
+// contador en el libro histórico (Lote 1, 03-jul) — NO cambiar a 1-2-001
+// "Inventario" sin también migrar ese asiento, o el balance deja de ser
+// comparable entre períodos.
+export const CUENTA_COGS = "5-1-001"; // Costo de mercadería vendida
+export const CUENTA_CXP = "2-1-001"; // Cuentas por pagar proveedores
+// Diferencial cambiario entre el TC congelado en Lote.costoTotalCent (al
+// comprar) y el TC vigente al momento de pagar (ver lib/lote.ts). Cuenta de
+// gasto (naturaleza deudora): Debe = pérdida cambiaria, Haber = ganancia.
+export const CUENTA_DIFERENCIAL_CAMBIARIO = "5-2-003";
+
 // Naturaleza estándar por tipo (deudora crece con Debe; acreedora con Haber).
 export function naturalezaDeTipo(tipo: string): "deudora" | "acreedora" {
   return tipo === "activo" || tipo === "gasto" ? "deudora" : "acreedora";

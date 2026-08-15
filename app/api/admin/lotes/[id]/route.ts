@@ -14,6 +14,14 @@ import { writeAudit } from "@/lib/audit";
  * VIGENTE en ese momento (el costo en ₡ deja de flotar desde acá en
  * adelante). Al volver a `pagado=false` (corrección), libera el congelado
  * para que vuelva a flotar con el TC vigente — ver lib/lote.ts.
+ *
+ * OJO CONTABLE: este toggle NO genera ni corrige ningun Asiento -- es una
+ * correccion de dato administrativo, no un registro de pago. La unica ruta
+ * que cierra la Cuentas por pagar (2-1-001) que abrio la compra del lote es
+ * POST /api/admin/asientos/pagar-lote. Si alguien marca pagado=true aca en
+ * vez de usar esa ruta, la CxP de ese lote queda con saldo para siempre
+ * (mismo gap documentado en app/api/admin/lotes/route.ts para lotes que
+ * nacen ya pagados desde LoteSheet).
  */
 export async function PATCH(request: Request, { params }: { params: { id: string } }) {
   const session = await requireValidSession();
