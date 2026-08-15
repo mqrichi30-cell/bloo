@@ -1,0 +1,20 @@
+[build]
+  command = "prisma generate && next build"
+  publish = ".next"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
+
+# sharp y prisma son módulos nativos: no los bundlee esbuild, inclúyelos tal cual.
+[functions]
+  node_bundler = "esbuild"
+  external_node_modules = ["sharp", "@img/sharp-linux-x64", "@img/sharp-libvips-linux-x64", "@prisma/client", "prisma", ".prisma"]
+  included_files = [
+    "node_modules/.prisma/client/**",
+    "node_modules/@prisma/engines/**",
+    "node_modules/@img/sharp-linux-x64/**",
+    "node_modules/@img/sharp-libvips-linux-x64/**"
+  ]

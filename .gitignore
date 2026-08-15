@@ -26,7 +26,16 @@ yarn-debug.log*
 yarn-error.log*
 
 # local env files
+.env
 .env*.local
+!.env.example
+
+# database
+/prisma/*.db
+/prisma/*.db-journal
+
+# uploads (user photos, not committed)
+/uploads/
 
 # vercel
 .vercel
@@ -34,3 +43,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Local Netlify folder
+.netlify

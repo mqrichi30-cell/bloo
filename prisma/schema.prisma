@@ -1,0 +1,358 @@
+// bloo — schema de datos
+// Dinero SIEMPRE entero en céntimos (x100). Nunca Float/Decimal para montos.
+// Ventas y lotes son append-only: no se editan filas históricas, se corrige
+// con Return + AuditLog.
+//
+// VENTA = TICKET + ÍTEMS: una Sale es un ticket (varios modelos posibles),
+// con UN monto total tecleado por Cris (no por par). Cada modelo/cantidad
+// vendido vive en SaleItem. Ver Sale/SaleItem más abajo.
+//
+// COSTEO: pooled por LOTE, no por modelo/par. El costo vive en `Lote`
+// (inmutable, global, sin relación a un modelo específico). El costo unitario
+// que se le "cobra" a cada ítem de venta (costoUnitSnapshotCent en SaleItem)
+// es SUM(Lote.costoTotalCent) / SUM(Lote.unidades) en el momento de vender —
+// se prorratea igual sobre TODOS los ítems de un ticket, sin importar el
+// modelo. Ver lib/lote.ts.
+
+generator client {
+  provider      = "prisma-client-js"
+  // native = dev local; rhel-openssl-3.0.x = Netlify Functions (AWS Lambda AL2023).
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// Enums se validan como string en Zod/TS
+// (Role = "admin" | "vendedor", SaleStatus = "activa" | "devuelta" | "parcial",
+// ReservaEstado = "activa" | "entregada" | "cancelada").
+
+model User {
+  id           String   @id @default(uuid())
+  username     String   @unique
+  passwordHash String
+  role         String // "admin" | "vendedor"
+  nombre       String
+  // Correo para "olvidé mi contraseña". Los usuarios existentes (seed previo)
+  // arrancan en null hasta que se pobla vía ADMIN_EMAIL/VENDEDOR_EMAIL en el
+  // seed o editándolo a mano desde /perfil. Sin correo, /api/auth/forgot
+  // simplemente no manda nada (sigue respondiendo 200 genérico).
+  email        String?
+  activo       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  lotes               Lote[]
+  sales               Sale[]
+  returns             Return[]
+  reservas            Reserva[]
+  auditLogs           AuditLog[]
+  asientos            Asiento[]
+  passwordResetTokens PasswordResetToken[]
+}
+
+// Rate-limit propio de "olvidé mi contraseña", separado de LoginAttempt: el
+// disparador es el envío de un correo (costo distinto, y no queremos que
+// alguien golpeando forgot bloquee también el login del mismo username, ni
+// viceversa). Mismo estilo/índices que LoginAttempt (ver lib/auth.ts).
+model PasswordResetAttempt {
+  id        String   @id @default(uuid())
+  username  String
+  ip        String
+  createdAt DateTime @default(now())
+
+  @@index([username, createdAt])
+  @@index([ip, createdAt])
+}
+
+// Token de un solo uso para resetear contraseña por correo. Solo se guarda el
+// HASH (SHA-256) del token, nunca el valor en claro — el token de 32 bytes al
+// azar ya tiene entropía suficiente para no necesitar bcrypt acá. Expira en
+// 30 min (ver lib/password-reset.ts) y se invalida (usedAt) al usarse, junto
+// con cualquier otro token vivo del mismo usuario.
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id])
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// Rate-limit / lockout de login. Se consulta por username en una ventana de tiempo.
+// Nunca se guarda el password intentado.
+model LoginAttempt {
+  id        String   @id @default(uuid())
+  username  String
+  ip        String
+  success   Boolean
+  createdAt DateTime @default(now())
+
+  @@index([username, createdAt])
+  @@index([ip, createdAt])
+}
+
+// Configuración global editable desde admin/Perfil. Fila única (id fijo = 1).
+model AppConfig {
+  id                    Int       @id @default(1)
+  // ₡ por USD, x100 para precisión (510.00 -> 51000). Usado para derivar
+  // Lote.costoTotalCent desde Lote.costoTotalUsdCent. ESTIMADO hasta
+  // confirmar con el estado de cuenta real de la tarjeta.
+  tipoCambioUsdCent     Int       @default(51000)
+  // "BAC/BCCR ventanilla" (automático, ver lib/tipo-cambio-bac.ts) o "manual"
+  // (Cris lo editó a mano en Perfil — el refresh diario NO lo pisa hasta el
+  // día siguiente, o hasta que se toque "Actualizar ahora").
+  tipoCambioFuente      String    @default("manual")
+  // Última vez que tipoCambioUsdCent cambió (automático o manual).
+  tipoCambioActualizado DateTime?
+  // Cris no está formalizado ante Hacienda todavía: mientras esté en false,
+  // el precio cobrado ES el ingreso completo (sin desglose de IVA). Al
+  // formalizarse, activar acá — la lógica de venta vuelve a derivar
+  // base/IVA al 13% sin tocar código (ver lib/money.ts, app/api/sales).
+  ivaActivo             Boolean   @default(false)
+  // Día del mes en que corta el estado de cuenta de la tarjeta de crédito
+  // (ej. 21). Un lote comprado con tarjeta en o antes de este día vence el
+  // mismo día del mes SIGUIENTE; comprado después, vence el mismo día del mes
+  // SUBSIGUIENTE. Ver lib/lote.ts#computeFechaVencimientoPago. Editable en
+  // Perfil (admin).
+  diaCorteTarjeta       Int       @default(21)
+  updatedAt             DateTime  @updatedAt
+}
+
+model Model {
+  id          String  @id @default(uuid())
+  nombre      String
+  sku         String?
+  fotoUrl     String?
+  // Foto guardada EN LA DB (bytea) para que persista en serverless (Netlify).
+  // El buffer ya viene procesado (magic-bytes + sharp + EXIF strip). Se sirve
+  // por /api/uploads/models/[filename] leyendo de acá.
+  fotoData    Bytes?
+  fotoMime    String?
+  cabys       String?
+  categoria   String?
+  descripcion String?
+
+  // precio de venta al público, con IVA por default (ver Sale.precioIncluyeIva)
+  precioVentaCent Int
+
+  activo Boolean @default(true)
+
+  // Unidades disponibles para vender de ESTE modelo/nombre. El COSTO ya no
+  // vive acá (ver nota de costeo pooled arriba) — esto es solo un contador de
+  // unidades por bucket con nombre (los 8 modelos nombrados + "Sin
+  // especificar" para el resto del inventario sin identificar).
+  stockQty Int @default(0)
+
+  // Unidades apartadas (reservadas) que restan de lo vendible pero siguen
+  // físicamente en inventario hasta entregarse. Ver modelo Reserva.
+  stockReservado Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  saleItems SaleItem[]
+  reservas  Reserva[]
+
+  @@index([activo])
+}
+
+// Lote de compra de inventario. GLOBAL, no atado a un modelo específico
+// (Cris compra en bloque sin desglose por par). Inmutable — nunca se edita
+// después de creado; es el ledger financiero de costo.
+model Lote {
+  id                   String    @id @default(uuid())
+  fecha                DateTime
+  unidades             Int
+  costoTotalUsdCent    Int // en centavos de USD (ej. $80.00 -> 8000)
+  costoTotalCent       Int // derivado a ₡ con el tipo de cambio vigente al momento de crear el lote
+  moneda               String    @default("USD")
+  medioPago            String    @default("tarjeta_credito")
+  fechaVencimientoPago DateTime?
+  pagado               Boolean   @default(false)
+  // Tipo de cambio (₡/USD x100) congelado en el momento en que el lote se
+  // marca `pagado=true`. Mientras `pagado=false`, el costo en ₡ de este lote
+  // FLOTA con el tipo de cambio vigente (ver lib/lote.ts#costoLoteEnColonesCent)
+  // — este campo se llena una sola vez, al pagar, y ya no cambia después.
+  tipoCambioPagoCent   Int?
+
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([fecha])
+  @@index([pagado])
+}
+
+// Venta = TICKET (puede incluir varios modelos). Inmutable (append-only).
+// Corrección = Return, nunca UPDATE de esta fila. El monto lo teclea Cris a
+// nivel de ticket (no por par) — ver SaleItem para el desglose por modelo.
+model Sale {
+  id    String   @id @default(uuid())
+  fecha DateTime @default(now())
+
+  totalCent        Int // monto TOTAL del ticket, tecleado por Cris (bruto)
+  precioIncluyeIva Boolean @default(true) // si `totalCent` ya incluía IVA (relevante solo si ivaActivo=true)
+
+  // derivados (ver lib/money.ts#deriveIvaConfigurable): con ivaActivo=false,
+  // baseCent=totalCent e ivaCent=0.
+  baseCent Int
+  ivaCent  Int
+
+  // CORAZÓN de la auditoría: COGS del ticket completo = SUM(SaleItem.cogsLineCent).
+  cogsCent     Int
+  utilidadCent Int // baseCent - cogsCent
+
+  estado String @default("activa") // "activa" | "devuelta" | "parcial"
+
+  clienteNombre String?
+  clienteId     String?
+  formaPago     String?
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  items   SaleItem[]
+  returns Return[]
+
+  @@index([userId, fecha])
+  @@index([fecha])
+}
+
+// Línea de un ticket: un modelo + cantidad dentro de una Sale. Inmutable.
+model SaleItem {
+  id     String @id @default(uuid())
+  saleId String
+  sale   Sale   @relation(fields: [saleId], references: [id])
+
+  modelId String
+  model   Model  @relation(fields: [modelId], references: [id])
+
+  cantidad Int
+
+  // Snapshot pooled (SUM Lote.costoTotalCent / SUM Lote.unidades) al momento
+  // de vender — el MISMO valor para todos los ítems de un mismo ticket,
+  // prorrateado igual sin importar el modelo.
+  costoUnitSnapshotCent Int
+  cogsLineCent          Int // cantidad * costoUnitSnapshotCent, guardado para auditoría
+
+  createdAt DateTime @default(now())
+
+  @@index([saleId])
+  @@index([modelId])
+}
+
+// Devolución / ajuste. Nunca se borra ni edita una Sale; esto es lo único que
+// "revierte" una venta, con su propio registro y AuditLog.
+model Return {
+  id     String   @id @default(uuid())
+  saleId String
+  sale   Sale     @relation(fields: [saleId], references: [id])
+  fecha  DateTime @default(now())
+
+  cantidadDevuelta      Int
+  costoUnitSnapshotCent Int // heredado de Sale, no recalculado
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  createdAt DateTime @default(now())
+}
+
+// Reserva: aparta stock (stockReservado) sin contar como ingreso hasta que se
+// entrega (se convierte en Sale — flujo de conversión pendiente, TODO).
+// Soporte de datos listo; sin UI de creación todavía (cantidad real la define
+// Cris, no se inventa acá — ver seed.ts).
+model Reserva {
+  id             String    @id @default(uuid())
+  modelId        String
+  model          Model     @relation(fields: [modelId], references: [id])
+  cantidad       Int
+  precioUnitCent Int
+  fecha          DateTime  @default(now())
+  estado         String    @default("activa") // "activa" | "entregada" | "cancelada"
+  entregadaEn    DateTime?
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([modelId, estado])
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id])
+  accion    String
+  entidad   String
+  entidadId String
+  detalle   String // JSON serializado
+  createdAt DateTime @default(now())
+
+  @@index([entidad, entidadId])
+  @@index([createdAt])
+}
+
+// ============================================================
+// MÓDULO CONTABLE (partida doble)
+// ============================================================
+
+// Plan de cuentas. Cada asiento mueve varias cuentas (debe/haber).
+model Cuenta {
+  id         String   @id @default(uuid())
+  codigo     String   @unique // "1-1-001"
+  nombre     String
+  tipo       String // "activo" | "pasivo" | "patrimonio" | "ingreso" | "gasto"
+  naturaleza String // "deudora" | "acreedora"
+  // true = es un medio de pago (Caja, SINPE Cris/Sara, Datáfono) -> aparece en
+  // el selector de medio de pago de las plantillas.
+  esMedioPago Boolean @default(false)
+  activo      Boolean @default(true)
+  createdAt   DateTime @default(now())
+
+  lineas LineaAsiento[]
+
+  @@index([tipo, codigo])
+}
+
+// Asiento = un movimiento contable con N líneas que CUADRAN (Σdebe = Σhaber).
+// Append-only: no se edita; corrección = asiento inverso.
+model Asiento {
+  id        String   @id @default(uuid())
+  fecha     DateTime
+  glosa     String
+  origen    String   @default("manual") // "manual" | "pago_lote" | "cobro_reserva"
+  refId     String? // id del Lote/Reserva si viene de una plantilla
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+
+  lineas LineaAsiento[]
+
+  @@index([fecha])
+}
+
+// Una línea del asiento: una cuenta con monto en DEBE o en HABER (uno de los dos).
+model LineaAsiento {
+  id        String  @id @default(uuid())
+  asientoId String
+  asiento   Asiento @relation(fields: [asientoId], references: [id], onDelete: Cascade)
+  cuentaId  String
+  cuenta    Cuenta  @relation(fields: [cuentaId], references: [id])
+  debeCent  Int     @default(0)
+  haberCent Int     @default(0)
+
+  @@index([asientoId])
+  @@index([cuentaId])
+}

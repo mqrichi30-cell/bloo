@@ -133,10 +133,16 @@ Validación dura: `cantidad <= stockQty` o rechazo 4xx con mensaje.
 
 **Register:** producto (herramienta de trabajo). Login = único momento expresivo de marca; resto restrained.
 
-### Tokens (modo claro Must; dark Should)
-- Color: `--navy-900 #0C2A44` (primario/CTA/header/tab activo), `--navy-950 #071522`, `--navy-700 #17456B`, `--azure-500 #1F5C86` (links/ícono activo/serie chart), `--azure-300 #4FA9E0` (decorativo grande, nunca texto chico), `--sand-50 #F4EEE1`, `--sand-200 #E7D9BC`, `--sand-600 #8C6A34` (texto sobre sand), `--white #FFFFFF` (fondo base trabajo), `--surface-alt #F5F7FA`, `--line-200 #E2E7ED`, `--ink-900 #0B1F33` (texto primario), `--ink-700 #33455B` (secundario/placeholder).
-- Semánticos (par texto/bg): éxito `#0D7A5F`/`#E3F3EC`, warn `#8A5A16`/`#FBEDD8`, error `#A8341F`/`#FBE7E2`, info `#1F5C86`/`#E4F1FA`.
-- Tipografía: **Pacifico** solo para wordmark "bloo" (login/splash; nunca UI). **Inter** (variable) para todo UI/datos con `tabular-nums` en montos. Escala: Display 40, H1 24 SemiBold, H2 18 SemiBold, Body 15, Label 13 Medium, Caption 12, Data-lg 28 Bold, Data-md 15 SemiBold.
+### Tokens (modo claro Must; dark Should) — PALETA OFICIAL DE MARCA (manual de bloo)
+Fuente: manual de marca entregado por Cris. Estos hex son CANÓN, reemplazan cualquier suposición previa.
+- **Marca:** `--navy-900 #0B0E30` (primario/CTA/header/tab activo/login bg), `--slate-800 #262A33` (superficies oscuras alternas, texto sobre claro muy oscuro), `--blue-300 #80A7B6` (accent: links, ícono tab activo, serie de charts, olas decorativas), `--cream-100 #E5E1D0` (sand/crema: fondo alterno puntual, login card, badges), `--gray-500 #84817D` (gris cálido: metadata, bordes decorativos, texto terciario).
+- **Neutros de trabajo:** `--white #FFFFFF` (fondo base de toda pantalla de trabajo — NO crema difusa), `--surface-alt #F5F6F7` (segunda capa: tab bar, cards, headers de sección), `--line-200 #E4E4E2` (bordes/separadores), `--ink-900 #1A1D24` (texto primario, derivado de slate para calidez), `--ink-600 #55585F` (secundario/placeholder — nunca gris más claro).
+- **Semánticos** (par texto/bg; armonizan con la marca, no existen en el manual → definidos aquí): éxito `#2E6B54`/`#E4F0EA`, warn `#8A6A2C`/`#F4EBD8`, error `#9E3B2E`/`#F5E4E0`, info `#3E6B7D`/`#E6EEF1`. Estado nunca solo por color (ícono+texto).
+- Tipografía:
+  - **Logo/wordmark "bloo":** fuente **Halimum** (script, licenciada). Como las letras SON el logo y Halimum no es libre, **renderizar el wordmark como SVG inline** (recreación del script con **ola dentro de una "o"**), no como webfont. Fallback textual solo si falla el SVG: `"Dancing Script", cursive`. Si Cris coloca `public/logo.svg` o `public/logo.png`, usar ese asset real con prioridad.
+  - **Tagline:** "MADE FOR SUNNY DAYS…" en Helvetica Now uppercase, `letter-spacing: .18em`, peso regular, color según fondo. Acompaña al wordmark en login/splash.
+  - **UI/datos:** **Helvetica Now** (licenciada) con fallback stack: `"Helvetica Now Text", "Helvetica Neue", Helvetica, Arial, "Inter", system-ui, sans-serif`. Cargar **Inter** desde Google Fonts como sustituto web funcional (Helvetica Now no está disponible libre); es visualmente cercano. `tabular-nums` en todo monto ₡.
+  - Escala: Display(logo SVG) ~40px, H1 24 SemiBold, H2 18 SemiBold, Body 15, Label 13 Medium, Caption 12, Data-lg 28 Bold, Data-md 15 SemiBold.
 - Radios: sm 8 / md 12 / lg 20 / full 999. Sombras tinte navy (ver spec). Focus ring `0 0 0 3px rgba(31,92,134,.35)`. Espaciado base 4px (4/8/12/16/20/24/32/40/48/64), padding pantalla 16–20.
 
 ### Navegación (bottom tab bar, labels visibles, íconos Lucide/Phosphor outline→filled activo)
