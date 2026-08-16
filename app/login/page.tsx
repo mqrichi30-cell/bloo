@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { Logo } from "@/components/Logo";
@@ -94,13 +93,6 @@ export default function LoginPage() {
         <PrimaryButton type="submit" loading={loading} className="mt-2">
           Entrar
         </PrimaryButton>
-
-        <Link
-          href="/olvide"
-          className="inline-flex min-h-[44px] items-center justify-center text-center text-caption text-ink-600 underline underline-offset-2"
-        >
-          ¿Olvidaste tu contraseña?
-        </Link>
       </form>
     </div>
   );

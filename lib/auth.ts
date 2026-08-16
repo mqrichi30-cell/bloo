@@ -91,41 +91,6 @@ export async function recordLoginAttempt(
   await prisma.loginAttempt.create({ data: { username, ip, success } });
 }
 
-// "Olvidé mi contraseña": mismo estilo que checkLockout/recordLoginAttempt
-// (keyeado solo por username, IP nunca decide nada — ver getClientIp), pero
-// en tabla propia (PasswordResetAttempt) para no mezclar el lockout de login
-// con el de forgot: son ataques distintos (credential stuffing vs. mail
-// bombing) y bloquear uno no debería bloquear el otro. Acá se cuenta CADA
-// intento (no solo fallos): el costo a limitar es "cuántos correos salen",
-// no "cuántas contraseñas incorrectas se probaron".
-const FORGOT_MAX_ATTEMPTS = 3;
-const FORGOT_WINDOW_MS = 15 * 60 * 1000; // 15 min
-
-export async function checkForgotLockout(
-  username: string
-): Promise<{ locked: boolean; retryAfterSeconds?: number }> {
-  const now = Date.now();
-  const recent = await prisma.passwordResetAttempt.findMany({
-    where: { username, createdAt: { gte: new Date(now - FORGOT_WINDOW_MS) } },
-    orderBy: { createdAt: "asc" },
-  });
-
-  if (recent.length < FORGOT_MAX_ATTEMPTS) {
-    return { locked: false };
-  }
-
-  const oldest = recent[0].createdAt.getTime();
-  const unlockAt = oldest + FORGOT_WINDOW_MS;
-  if (now < unlockAt) {
-    return { locked: true, retryAfterSeconds: Math.ceil((unlockAt - now) / 1000) };
-  }
-  return { locked: false };
-}
-
-export async function recordForgotAttempt(username: string, ip: string): Promise<void> {
-  await prisma.passwordResetAttempt.create({ data: { username, ip } });
-}
-
 const trustedProxyAllowlist = (process.env.TRUSTED_PROXY_IPS ?? "")
   .split(",")
   .map((ip) => ip.trim())

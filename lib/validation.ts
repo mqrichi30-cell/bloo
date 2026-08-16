@@ -5,28 +5,6 @@ export const loginSchema = z.object({
   password: z.string().min(1, "Ingresá tu contraseña").max(256),
 });
 
-// Mínimo de la contraseña nueva al resetear (ver app/api/auth/reset/route.ts).
-export const PASSWORD_MIN_LENGTH = 10;
-
-export const forgotPasswordSchema = z.object({
-  username: z.string().trim().min(1, "Ingresá tu usuario").max(64),
-});
-
-export const resetPasswordSchema = z.object({
-  // El token viaja en base64url (ver lib/password-reset.ts); 512 es holgado.
-  token: z.string().trim().min(1, "Falta el token").max(512),
-  password: z
-    .string()
-    .min(PASSWORD_MIN_LENGTH, `La contraseña debe tener al menos ${PASSWORD_MIN_LENGTH} caracteres`)
-    .max(256, "La contraseña es demasiado larga"),
-});
-
-// Correo propio, editable desde /perfil. String vacío = borrar el correo
-// (ej. si Cris se equivocó y quiere volver a null antes de confirmar el real).
-export const emailUpdateSchema = z.object({
-  email: z.union([z.string().trim().toLowerCase().email("Ingresá un correo válido").max(254), z.literal("")]),
-});
-
 const MAX_MONEY_CENT = 100_000_000_00; // tope razonable: ₡100,000,000
 const MAX_USD_CENT = 1_000_000_00; // tope razonable: $1,000,000
 

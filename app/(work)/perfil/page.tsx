@@ -221,63 +221,6 @@ function AjustesSettings() {
   );
 }
 
-function CorreoSettings() {
-  const { showToast } = useToast();
-  const [email, setEmail] = useState<string | null>(null);
-  const [emailText, setEmailText] = useState("");
-  const [loaded, setLoaded] = useState(false);
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    apiFetch<{ email: string | null }>("/api/auth/email")
-      .then((res) => {
-        setEmail(res.email);
-        setEmailText(res.email ?? "");
-      })
-      .finally(() => setLoaded(true));
-  }, []);
-
-  async function handleSave() {
-    setSaving(true);
-    try {
-      const res = await apiFetch<{ email: string | null }>("/api/auth/email", {
-        method: "PUT",
-        body: JSON.stringify({ email: emailText.trim() }),
-      });
-      setEmail(res.email);
-      showToast(res.email ? "Correo guardado." : "Correo eliminado.", "success");
-    } catch (err) {
-      showToast(err instanceof ApiError ? err.message : "No se pudo guardar", "error");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  if (!loaded) return null;
-
-  return (
-    <div className="mx-5 mb-4 flex flex-col gap-2 rounded-md border border-line-200 p-4">
-      <div>
-        <p className="text-label text-ink-900">Correo</p>
-        <p className="text-caption text-ink-600">
-          Se usa solo para &ldquo;olvidé mi contraseña&rdquo;. {email ? "" : "Sin correo cargado todavía."}
-        </p>
-      </div>
-      <input
-        type="email"
-        inputMode="email"
-        value={emailText}
-        onChange={(e) => setEmailText(e.target.value)}
-        placeholder="tu@correo.com"
-        className="min-h-[48px] w-full rounded-md border border-line-200 bg-white px-4 text-body text-ink-900 outline-none"
-      />
-      <PrimaryButton onClick={handleSave} loading={saving}>
-        Guardar correo
-      </PrimaryButton>
-    </div>
-  );
-}
-
 export default function PerfilPage() {
   const router = useRouter();
   const { role, nombre } = useRole();
@@ -303,8 +246,6 @@ export default function PerfilPage() {
         <p className="text-h2 text-ink-900">{role === "admin" ? "Capitán" : nombre}</p>
         <p className="text-caption capitalize text-ink-600">{role}</p>
       </div>
-
-      <CorreoSettings />
 
       {role === "admin" && <AjustesSettings />}
 

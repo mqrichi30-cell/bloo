@@ -2,18 +2,8 @@ import { NextResponse, type NextRequest } from "next/server";
 import { getIronSession } from "iron-session";
 import { sessionOptions, isSessionExpired, type SessionData } from "@/lib/session";
 
-// "/olvide" (pedir el link) y "/reset" (destino del link de correo) son
-// pantallas del flujo de "olvidé mi contraseña" del otro agente — sin sesión
-// por definición. Se declaran públicas acá porque, si no, el middleware
-// redirigiría a /login antes de que el usuario pueda usarlas.
-const PUBLIC_PATHS = ["/login", "/olvide", "/reset"];
-const PUBLIC_API_PREFIXES = [
-  "/api/auth/login",
-  "/api/auth/logout",
-  "/api/auth/forgot",
-  "/api/auth/reset",
-  "/api/keepalive",
-];
+const PUBLIC_PATHS = ["/login"];
+const PUBLIC_API_PREFIXES = ["/api/auth/login", "/api/auth/logout", "/api/keepalive"];
 
 /**
  * Chequeo GRUESO de sesión + bloqueo de /admin/** y /api/admin/** a no-admin.
