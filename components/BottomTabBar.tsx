@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ChartBar, ShoppingBag, Package, Glasses, CircleUser, History, NotebookText } from "lucide-react";
+import { ChartBar, ShoppingBag, Package, Glasses, CircleUser, NotebookText } from "lucide-react";
 import type { Role } from "@/lib/session";
 
 interface Tab {
@@ -11,22 +11,20 @@ interface Tab {
   icon: React.ElementType;
 }
 
+// "Ventas" ya no es una pestaña: se fusionó dentro de "Vender", que ahora
+// registra y muestra el historial completo en la misma pantalla.
 const VENDEDOR_TABS: Tab[] = [
   { href: "/vender", label: "Vender", icon: ShoppingBag },
-  { href: "/ventas", label: "Ventas", icon: History },
   { href: "/modelos", label: "Modelos", icon: Glasses },
   { href: "/perfil", label: "Perfil", icon: CircleUser },
 ];
 
-// 7 pestañas para admin: /conta solo estaba enlazada desde el Panel y /ventas
-// no era alcanzable de ninguna forma, así que el borrado de ventas viejas
-// quedaba escondido. Con 7 items a 375px de ancho quedan ~53px cada uno:
-// alcanza para el ícono y una etiqueta corta, por eso "Stock" y no
-// "Inventario" (esa etiqueta se desbordaba).
+// /conta antes solo estaba enlazada desde el Panel, así que el módulo contable
+// era invisible. "Inventario" se abrevia a "Stock" porque con 6 pestañas a
+// 375px de ancho esa etiqueta se desbordaba.
 const ADMIN_TABS: Tab[] = [
   { href: "/panel", label: "Panel", icon: ChartBar },
   { href: "/vender", label: "Vender", icon: ShoppingBag },
-  { href: "/ventas", label: "Ventas", icon: History },
   { href: "/inventario", label: "Stock", icon: Package },
   { href: "/modelos", label: "Modelos", icon: Glasses },
   { href: "/conta", label: "Conta", icon: NotebookText },

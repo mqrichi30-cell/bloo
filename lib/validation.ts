@@ -5,6 +5,19 @@ export const loginSchema = z.object({
   password: z.string().min(1, "Ingresá tu contraseña").max(256),
 });
 
+/**
+ * Id de entidad. NO se valida como UUID a propósito.
+ *
+ * En el schema los id son `String @id @default(uuid())`: el default genera un
+ * UUID, pero las filas creadas por scripts o migraciones traen ids legibles
+ * (`bloo-cta-1-1-101`, `bloo-mdl-estuche`). Exigir formato UUID hacía que la
+ * app rechazara con "Datos inválidos" cualquier operación contra esas filas
+ * —por ejemplo vender eligiendo un medio de pago— aunque la cuenta existiera.
+ * Validar el FORMATO acopla la API a cómo se creó la fila; lo que importa es
+ * que exista, y eso ya se verifica contra la base en cada handler.
+ */
+export const idSchema = z.string().trim().min(1).max(64);
+
 const MAX_MONEY_CENT = 100_000_000_00; // tope razonable: ₡100,000,000
 const MAX_USD_CENT = 1_000_000_00; // tope razonable: $1,000,000
 
@@ -27,7 +40,7 @@ export const modelUpdateSchema = modelCreateSchema.partial();
 // Lote de compra de inventario (pooled, global). Reemplaza al viejo
 // purchaseCreateSchema por-modelo/por-costo-unitario.
 export const loteCreateSchema = z.object({
-  modelId: z.string().uuid(), // a qué modelo/bucket se le suman las unidades de este lote
+  modelId: idSchema, // a qué modelo/bucket se le suman las unidades de este lote
   fecha: z.coerce.date().optional(),
   unidades: z.number().int().positive("Las unidades deben ser mayor a 0"),
   costoTotalUsdCent: z.number().int().min(0).max(MAX_USD_CENT),
@@ -61,14 +74,14 @@ export const loteUpdateSchema = z.object({
 });
 
 export const reservaCreateSchema = z.object({
-  modelId: z.string().uuid(),
+  modelId: idSchema,
   cantidad: z.number().int().positive("La cantidad debe ser mayor a 0"),
   precioUnitCent: z.number().int().min(0).max(MAX_MONEY_CENT).optional(),
 });
 
 // Venta = TICKET con uno o varios modelos, y UN monto total (no por par).
 export const saleItemInputSchema = z.object({
-  modelId: z.string().uuid(),
+  modelId: idSchema,
   cantidad: z.number().int().positive("La cantidad debe ser mayor a 0"),
 });
 
@@ -80,7 +93,7 @@ export const saleCreateSchema = z.object({
   formaPago: z.string().trim().max(40).optional().or(z.literal("")),
   // Cuenta contable (esMedioPago=true) por donde entró la plata. Si viene, la
   // venta genera su asiento sola: Debe [medio] / Haber Ingresos por ventas.
-  cuentaMedioPagoId: z.string().uuid().optional(),
+  cuentaMedioPagoId: idSchema.optional(),
 });
 
 export const periodQuerySchema = z.object({

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { idSchema } from "@/lib/validation";
 import { prisma } from "@/lib/prisma";
 import { requireValidSession } from "@/lib/session";
 import { verifyCsrf } from "@/lib/csrf";
@@ -34,7 +35,7 @@ const createSchema = z.object({
   // Cuenta madre para subcuentas jerárquicas (profundidad máxima 1). Una
   // hija HEREDA tipo/naturaleza de la madre — ver más abajo, se ignora lo
   // que venga en `tipo`/`naturaleza` cuando hay parentId.
-  parentId: z.string().uuid().nullable().optional(),
+  parentId: idSchema.nullable().optional(),
 });
 
 export async function POST(request: Request) {

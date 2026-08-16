@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { idSchema } from "@/lib/validation";
 import { prisma } from "@/lib/prisma";
 import { requireValidSession } from "@/lib/session";
 import { verifyCsrf } from "@/lib/csrf";
@@ -11,8 +12,8 @@ import { CUENTA_CXP, CUENTA_DIFERENCIAL_CAMBIARIO } from "@/lib/conta";
 export const dynamic = "force-dynamic";
 
 const schema = z.object({
-  loteId: z.string().uuid(),
-  cuentaMedioPagoId: z.string().uuid(),
+  loteId: idSchema,
+  cuentaMedioPagoId: idSchema,
   montoCent: z.number().int().positive().optional(), // override opcional; default = total del lote
 });
 

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { idSchema } from "@/lib/validation";
 import { prisma } from "@/lib/prisma";
 import { requireValidSession } from "@/lib/session";
 import { verifyCsrf } from "@/lib/csrf";
@@ -8,8 +9,8 @@ import { writeAudit } from "@/lib/audit";
 export const dynamic = "force-dynamic";
 
 const schema = z.object({
-  reservaId: z.string().uuid(),
-  cuentaMedioPagoId: z.string().uuid(),
+  reservaId: idSchema,
+  cuentaMedioPagoId: idSchema,
   montoCent: z.number().int().positive().optional(),
 });
 

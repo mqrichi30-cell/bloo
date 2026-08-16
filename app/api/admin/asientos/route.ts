@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { idSchema } from "@/lib/validation";
 import { prisma } from "@/lib/prisma";
 import { requireValidSession } from "@/lib/session";
 import { verifyCsrf } from "@/lib/csrf";
@@ -49,7 +50,7 @@ const createSchema = z.object({
   lineas: z
     .array(
       z.object({
-        cuentaId: z.string().uuid(),
+        cuentaId: idSchema,
         debeCent: z.number().int().min(0).default(0),
         haberCent: z.number().int().min(0).default(0),
       })

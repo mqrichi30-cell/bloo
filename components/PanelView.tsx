@@ -24,6 +24,8 @@ interface DashboardResponse {
     utilidadDeltaCent: number;
     unidadesVendidas: number;
   };
+  /** Plata de bloo en manos de cada persona (saldo consolidado por cuenta raíz). */
+  fondos: { id: string; nombre: string; saldoCent: number }[];
   barBuckets: { label: string; ventasCount: number; ingresosCent: number; gastosCent: number; utilidadCent: number }[];
   ranking: { modelId: string; nombre: string; cantidad: number }[];
   lowStock: { id: string; nombre: string; stockQty: number }[];
@@ -112,6 +114,23 @@ export function PanelView() {
             />
             <KPICard label="Pares vendidos" valueNumber={data.kpis.unidadesVendidas} format="number" />
           </div>
+
+          {/* Plata de bloo en manos de cada persona. Es un saldo ACUMULADO, no
+              del período seleccionado: por eso va fuera de la grilla de KPIs y
+              lo dice el subtítulo. */}
+          {data.fondos.length > 0 && (
+            <section className="px-5 pb-4">
+              <h2 className="pb-2 text-label text-ink-600">En manos de quién · hoy</h2>
+              <div className="grid grid-cols-2 gap-3">
+                {data.fondos.map((f) => (
+                  <KPICard key={f.id} label={f.nombre} valueCent={f.saldoCent} format="currency" />
+                ))}
+              </div>
+              <p className="pt-2 text-caption text-ink-600">
+                Saldo acumulado de bloo, no del período. Tocá una cuenta en Contabilidad para ver el desglose.
+              </p>
+            </section>
+          )}
 
           <Link
             href="/conta"
