@@ -59,7 +59,19 @@ export async function POST(request: Request) {
 
   const csrf = verifyCsrf(request, session);
   if (!csrf.ok) {
-    return NextResponse.json({ error: "Token de seguridad inválido, recargá la página" }, { status: 403 });
+    // El motivo va en la respuesta a propósito: "token inválido" a secas no
+    // permite distinguir si faltó la cookie, si no coincide con la sesión o si
+    // el Origin no cuadra, y sin eso el fallo solo se puede adivinar. No
+    // filtra nada: son categorías de error, nunca el token.
+    return NextResponse.json(
+      {
+        error: `Token de seguridad inválido (${csrf.reason ?? "desconocido"}), recargá la página`,
+        motivo: csrf.reason,
+        tieneHeader: Boolean(request.headers.get("x-csrf-token")),
+        tieneSesionCsrf: Boolean(session.csrfToken),
+      },
+      { status: 403 }
+    );
   }
 
   let body: unknown;

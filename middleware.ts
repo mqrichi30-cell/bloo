@@ -1,6 +1,12 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getIronSession } from "iron-session";
-import { sessionOptions, isSessionExpired, type SessionData } from "@/lib/session";
+import {
+  sessionOptions,
+  isSessionExpired,
+  CSRF_COOKIE_NAME,
+  ABSOLUTE_TIMEOUT_MS,
+  type SessionData,
+} from "@/lib/session";
 
 const PUBLIC_PATHS = ["/login"];
 const PUBLIC_API_PREFIXES = ["/api/auth/login", "/api/auth/logout", "/api/keepalive"];
@@ -57,6 +63,28 @@ export async function middleware(request: NextRequest) {
 
   session.lastActive = Date.now();
   await session.save();
+
+  // Reemite la cookie de CSRF en cada request autenticada.
+  //
+  // Antes solo se emitía al hacer login, con 24h de vida. La sesión, en cambio,
+  // se re-guarda acá en cada request, así que su cookie es rodante. Resultado:
+  // la cookie de CSRF podía morir mientras la sesión seguía viva, y a partir de
+  // ahí toda mutación fallaba con "token de seguridad inválido" sin forma de
+  // recuperarse salvo volver a entrar. Reemitirla acá la vuelve rodante también
+  // y cierra ese hueco.
+  //
+  // No baja la seguridad: el valor sale de la sesión httpOnly (el navegador
+  // nunca lo elige) y verifyCsrf sigue exigiendo que el header coincida con la
+  // sesión y que el Origin sea el propio.
+  if (session.csrfToken) {
+    response.cookies.set(CSRF_COOKIE_NAME, session.csrfToken, {
+      httpOnly: false,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "strict",
+      path: "/",
+      maxAge: ABSOLUTE_TIMEOUT_MS / 1000,
+    });
+  }
 
   return response;
 }

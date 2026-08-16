@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ChartBar, ShoppingBag, Package, Glasses, CircleUser, History } from "lucide-react";
+import { ChartBar, ShoppingBag, Package, Glasses, CircleUser, History, NotebookText } from "lucide-react";
 import type { Role } from "@/lib/session";
 
 interface Tab {
@@ -18,11 +18,18 @@ const VENDEDOR_TABS: Tab[] = [
   { href: "/perfil", label: "Perfil", icon: CircleUser },
 ];
 
+// 7 pestañas para admin: /conta solo estaba enlazada desde el Panel y /ventas
+// no era alcanzable de ninguna forma, así que el borrado de ventas viejas
+// quedaba escondido. Con 7 items a 375px de ancho quedan ~53px cada uno:
+// alcanza para el ícono y una etiqueta corta, por eso "Stock" y no
+// "Inventario" (esa etiqueta se desbordaba).
 const ADMIN_TABS: Tab[] = [
   { href: "/panel", label: "Panel", icon: ChartBar },
   { href: "/vender", label: "Vender", icon: ShoppingBag },
-  { href: "/inventario", label: "Inventario", icon: Package },
+  { href: "/ventas", label: "Ventas", icon: History },
+  { href: "/inventario", label: "Stock", icon: Package },
   { href: "/modelos", label: "Modelos", icon: Glasses },
+  { href: "/conta", label: "Conta", icon: NotebookText },
   { href: "/perfil", label: "Perfil", icon: CircleUser },
 ];
 
@@ -42,7 +49,7 @@ export function BottomTabBar({ role }: { role: Role }) {
           <Link
             key={tab.href}
             href={tab.href}
-            className="relative flex flex-1 flex-col items-center gap-1 py-2.5 transition-colors"
+            className="relative flex min-w-0 flex-1 flex-col items-center gap-1 px-0.5 py-2.5 transition-colors"
             aria-current={active ? "page" : undefined}
           >
             {active && (
@@ -55,7 +62,11 @@ export function BottomTabBar({ role }: { role: Role }) {
             >
               <Icon size={22} strokeWidth={active ? 2.25 : 1.75} />
             </span>
-            <span className={`text-caption ${active ? "font-medium text-navy-900" : "text-ink-600"}`}>
+            <span
+              className={`max-w-full truncate text-caption ${
+                active ? "font-medium text-navy-900" : "text-ink-600"
+              }`}
+            >
               {tab.label}
             </span>
           </Link>
