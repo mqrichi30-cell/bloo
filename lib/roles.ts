@@ -68,6 +68,12 @@ export const SALE_SELECT_VENDEDOR = {
   baseCent: true,
   ivaCent: true,
   estado: true,
+  // Anulación: no es dato de costo, es el estado del ticket. El vendedor tiene
+  // que ver que un ticket suyo quedó anulado y por qué — si desapareciera de
+  // su historial creería que el sistema perdió la venta. `anuladaPorUserId` no
+  // sale: quién anuló es dato de administración.
+  anuladaEn: true,
+  anulacionMotivo: true,
   clienteNombre: true,
   formaPago: true,
   userId: true,

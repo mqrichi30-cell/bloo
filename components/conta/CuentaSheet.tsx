@@ -6,6 +6,7 @@ import { TextInput } from "@/components/ui/TextInput";
 import { PrimaryButton } from "@/components/ui/Button";
 import { apiFetch, ApiError } from "@/lib/api-client";
 import { useToast } from "@/components/ToastProvider";
+import { porcentajeABps } from "@/lib/comision";
 
 const TIPOS = [
   { v: "activo", l: "Activo" },
@@ -41,6 +42,9 @@ export function CuentaSheet({
   const [nombre, setNombre] = useState("");
   const [tipo, setTipo] = useState<(typeof TIPOS)[number]["v"]>("activo");
   const [esMedioPago, setEsMedioPago] = useState(false);
+  // Se teclea en PORCENTAJE (lo que dice el contrato del adquirente) y se
+  // manda en puntos básicos. Vacío = 0 = sin comisión configurada.
+  const [comisionPct, setComisionPct] = useState("");
   const [parentId, setParentId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -62,13 +66,21 @@ export function CuentaSheet({
     try {
       await apiFetch("/api/admin/cuentas", {
         method: "POST",
-        body: JSON.stringify({ codigo, nombre, tipo, esMedioPago, parentId }),
+        body: JSON.stringify({
+          codigo,
+          nombre,
+          tipo,
+          esMedioPago,
+          comisionBps: esMedioPago ? porcentajeABps(Number(comisionPct) || 0) : 0,
+          parentId,
+        }),
       });
       showToast("Cuenta creada.", "success");
       setCodigo("");
       setNombre("");
       setTipo("activo");
       setEsMedioPago(false);
+      setComisionPct("");
       setParentId(null);
       onSaved();
       onClose();
@@ -137,6 +149,21 @@ export function CuentaSheet({
           <input type="checkbox" checked={esMedioPago} onChange={(e) => setEsMedioPago(e.target.checked)} />
           Es un medio de pago (caja/banco/datáfono)
         </label>
+
+        {esMedioPago && (
+          <TextInput
+            label="Comisión que retiene (%)"
+            type="number"
+            inputMode="decimal"
+            step="0.01"
+            min="0"
+            max="20"
+            value={comisionPct}
+            onChange={(e) => setComisionPct(e.target.value)}
+            placeholder="0"
+            helperText="Solo para datáfono. Dejalo en blanco hasta confirmar la tarifa con el proveedor: con 0 no se registra ninguna comisión. Poné la tasa TOTAL retenida (con el IVA del adquirente incluido, si lo cobra)."
+          />
+        )}
 
         <PrimaryButton onClick={guardar} loading={saving} disabled={!codigo.trim() || !nombre.trim()}>
           Crear cuenta

@@ -13,16 +13,18 @@ import {
   loadLotesInRange,
   summarizeVentas,
   summarizeGastos,
+  summarizeCogs,
   buildBarBuckets,
   buildRankingByModel,
+  getCostoUnitarioPorSku,
   getLowStockModels,
   getUnpaidLotes,
 } from "@/lib/dashboard";
 
 const DISCLAIMER_IVA_OFF =
-  "Utilidad = ventas − compras del período. El gasto se registra al comprar el lote, no al vender. En meses de mucha compra la utilidad baja; se compensa cuando vendés ese inventario. Sin IVA (operación no formalizada).";
+  "Utilidad = ventas − compras del período. El gasto se registra al comprar el lote, no al vender. En meses de mucha compra la utilidad baja; se compensa cuando vendés ese inventario. El margen bruto es aparte: ventas − costo de lo vendido, al costo promedio de cada producto. Sin IVA (operación no formalizada).";
 const DISCLAIMER_IVA_ON =
-  "Cifras de utilidad BRUTA, netas de IVA, antes de gastos operativos. No sustituyen la contabilidad formal. Consulte a su contador.";
+  "Cifras de utilidad BRUTA, netas de IVA, antes de gastos operativos. El margen bruto usa el costo promedio por producto, no un promedio único. No sustituyen la contabilidad formal. Consulte a su contador.";
 
 export async function GET(request: Request) {
   const session = await requireValidSession();
@@ -49,7 +51,17 @@ export async function GET(request: Request) {
   const range = getPeriodRange(mode, year, month);
   const prevRange = getPreviousPeriodRange(mode, year, month);
 
-  const [sales, prevSales, saleItems, lotes, prevLotes, lowStock, lotesPorPagar, config] = await Promise.all([
+  const [
+    sales,
+    prevSales,
+    saleItems,
+    lotes,
+    prevLotes,
+    lowStock,
+    lotesPorPagar,
+    costoPorSku,
+    config,
+  ] = await Promise.all([
     loadSalesInRange(range),
     loadSalesInRange(prevRange),
     loadSaleItemsInRange(range),
@@ -57,6 +69,7 @@ export async function GET(request: Request) {
     loadLotesInRange(prevRange),
     getLowStockModels(),
     getUnpaidLotes(),
+    getCostoUnitarioPorSku(),
     getAppConfig(prisma),
   ]);
   const { ivaActivo, tipoCambioUsdCent } = config;
@@ -66,6 +79,15 @@ export async function GET(request: Request) {
   const ventas = summarizeVentas(sales);
   const gastosCent = summarizeGastos(lotes, tipoCambioUsdCent);
   const utilidadCent = ventas.ingresosCent - gastosCent;
+
+  // COGS y margen bruto del período, al costo POR SKU (SaleItem.cogsLineCent).
+  // Convive con `utilidadCent` sin reemplazarlo: `utilidadCent` responde
+  // "¿cuánta plata entró menos cuánta salió?" (criterio del dueño, gasto al
+  // comprar); `margenBrutoCent` responde "¿cuánto dejó lo que vendí?", que es
+  // la cifra que el pool de costo mezclado venía distorsionando — le cobraba a
+  // cada lente el promedio de lentes y estuches. Ver docs/METAS_UMBRALES.md §1.4.
+  const cogsCent = summarizeCogs(saleItems);
+  const margenBrutoCent = ventas.ingresosCent - cogsCent;
 
   const prevVentas = summarizeVentas(prevSales);
   const prevGastosCent = summarizeGastos(prevLotes, tipoCambioUsdCent);
@@ -91,10 +113,19 @@ export async function GET(request: Request) {
 
   return NextResponse.json({
     period: { mode, year, month },
-    kpis: { ...ventas, gastosCent, utilidadCent, utilidadDeltaCent, unidadesVendidas },
+    kpis: {
+      ...ventas,
+      gastosCent,
+      utilidadCent,
+      utilidadDeltaCent,
+      unidadesVendidas,
+      cogsCent,
+      margenBrutoCent,
+    },
     fondos,
     barBuckets,
     ranking,
+    costoPorSku,
     lowStock,
     lotesPorPagar,
     ivaActivo,

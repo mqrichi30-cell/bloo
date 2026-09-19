@@ -4,7 +4,7 @@ import { requireValidSession } from "@/lib/session";
 import { verifyCsrf } from "@/lib/csrf";
 import { configUpdateSchema } from "@/lib/validation";
 import { writeAudit } from "@/lib/audit";
-import { getPooledUnitCostCent } from "@/lib/lote";
+import { getCostoUnitarioPorSku } from "@/lib/dashboard";
 import { DEFAULT_TIPO_CAMBIO_USD_CENT, DEFAULT_IVA_ACTIVO, DEFAULT_DIA_CORTE_TARJETA } from "@/lib/config";
 import { refreshTipoCambioIfNeeded, FUENTE_MANUAL } from "@/lib/tipo-cambio-bac";
 
@@ -20,7 +20,10 @@ export async function GET() {
     update: {},
     create: { id: 1, tipoCambioUsdCent: DEFAULT_TIPO_CAMBIO_USD_CENT, ivaActivo: DEFAULT_IVA_ACTIVO },
   });
-  const costoUnitPooledCent = await getPooledUnitCostCent(prisma);
+  // Costo unitario POR SKU. Antes acá salía un único `costoUnitPooledCent`
+  // (promedio de todos los lotes juntos): con lentes y estuches en el mismo
+  // pool ese número no describía el costo de ninguno de los dos.
+  const costoPorSku = await getCostoUnitarioPorSku();
 
   // Refresh LAZY en background: al cargar Panel/Ajustes se dispara el fetch
   // a BAC/BCCR si toca (no es de hoy en hora CR + es día hábil). No se
@@ -28,7 +31,7 @@ export async function GET() {
   // cacheado; la próxima carga ya refleja el nuevo. Nunca rompe si falla.
   void refreshTipoCambioIfNeeded(prisma).catch(() => {});
 
-  return NextResponse.json({ config, costoUnitPooledCent });
+  return NextResponse.json({ config, costoPorSku });
 }
 
 export async function PUT(request: Request) {

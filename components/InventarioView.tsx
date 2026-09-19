@@ -20,6 +20,13 @@ interface ModelStockItem {
   stockReservado: number;
 }
 
+interface CostoSku {
+  modelId: string | null;
+  nombre: string;
+  costoUnitCent: number;
+  unidadesCompradas: number;
+}
+
 interface ConfigResponse {
   config: {
     tipoCambioUsdCent: number;
@@ -27,7 +34,8 @@ interface ConfigResponse {
     tipoCambioActualizado: string | null;
     diaCorteTarjeta: number;
   };
-  costoUnitPooledCent: number;
+  /** Costo promedio ponderado POR PRODUCTO (antes era un promedio único). */
+  costoPorSku: CostoSku[];
 }
 
 export function InventarioView() {
@@ -54,14 +62,23 @@ export function InventarioView() {
     <div>
       <AppHeader title="Inventario" subtitle="Stock y lotes de compra" />
 
-      {configData && (
+      {configData && configData.costoPorSku.length > 0 && (
         <div className="mx-5 mb-3 rounded-md bg-surface-alt px-4 py-3">
-          <p className="text-label text-ink-600">Costo unitario pooled (por lote)</p>
-          <p className="tabular-nums text-data-lg text-ink-900">
-            {formatCRC(configData.costoUnitPooledCent)}
-          </p>
-          <p className="text-caption text-ink-600">
-            Igual para todos los modelos. Tipo de cambio ₡{(configData.config.tipoCambioUsdCent / 100).toFixed(2)}/USD ·{" "}
+          <p className="text-label text-ink-600">Costo unitario por producto</p>
+          <div className="flex flex-col gap-1.5 pt-1">
+            {configData.costoPorSku.map((sku) => (
+              <div key={sku.modelId ?? "sin-asignar"} className="flex items-baseline justify-between gap-3">
+                <span className="min-w-0 truncate text-body text-ink-900">{sku.nombre}</span>
+                <span className="shrink-0 text-right">
+                  <span className="tabular-nums text-data-md text-ink-900">{formatCRC(sku.costoUnitCent)}</span>
+                  <span className="pl-1.5 text-caption text-ink-600">{sku.unidadesCompradas} u. compradas</span>
+                </span>
+              </div>
+            ))}
+          </div>
+          <p className="pt-2 text-caption text-ink-600">
+            Promedio ponderado de los lotes de cada producto — ya no un promedio único de todo lo
+            comprado. Tipo de cambio ₡{(configData.config.tipoCambioUsdCent / 100).toFixed(2)}/USD ·{" "}
             {configData.config.tipoCambioFuente === "manual" ? "manual" : "BAC (BCCR)"} — editable en Perfil.
           </p>
         </div>

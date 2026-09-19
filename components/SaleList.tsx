@@ -1,58 +1,57 @@
 "use client";
 
 import { useCallback, useState } from "react";
-import { SaleRow } from "@/components/SaleRow";
+import { SaleRow, type SaleRowTicket } from "@/components/SaleRow";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useToast } from "@/components/ToastProvider";
 import { apiFetch, ApiError } from "@/lib/api-client";
 import { formatCRC } from "@/lib/money";
 
-export interface SaleTicket {
-  id: string;
-  totalCent: number;
-  fecha: string;
-  items: { cantidad: number; model?: { nombre: string } | null }[];
-}
+export type SaleTicket = SaleRowTicket;
 
 interface SaleListProps {
   sales: SaleTicket[];
-  /** true solo para admin: habilita el deslizar-para-borrar. */
-  canDelete: boolean;
-  /** Se llama cuando el borrado falla y hay que recargar desde el server. */
+  /** true solo para admin: habilita el deslizar-para-anular. */
+  canAnular: boolean;
+  /** Se llama cuando la anulación falla y hay que recargar desde el server. */
   onReload: () => void;
   /**
-   * Quita la venta del estado del padre (borrado optimista). El padre es dueño
-   * de la lista para que su estado vacío / KPIs reaccionen igual que si
-   * hubiera recargado.
+   * Marca la venta como anulada en el estado del padre (update optimista). El
+   * padre es dueño de la lista para que sus KPIs reaccionen igual que si
+   * hubiera recargado. Nótese que la venta NO se saca de la lista: anular no
+   * la hace desaparecer, la deja tachada.
    */
-  onDeleted: (saleId: string) => void;
+  onAnulada: (saleId: string, motivo: string) => void;
 }
 
 /**
- * Lista de tickets con borrado por gesto (admin). El borrado es OPTIMISTA:
- * la fila se va de inmediato y, si el server rechaza, se recarga la lista y
+ * Lista de tickets con anulación por gesto (admin). La anulación es OPTIMISTA:
+ * la fila se tacha de inmediato y, si el server rechaza, se recarga la lista y
  * se muestra el error — la UI nunca queda mintiendo sobre lo que pasó.
  */
-export function SaleList({ sales, canDelete, onReload, onDeleted }: SaleListProps) {
+export function SaleList({ sales, canAnular, onReload, onAnulada }: SaleListProps) {
   const { showToast } = useToast();
   const [pending, setPending] = useState<SaleTicket | null>(null);
 
-  const handleDeleteRequest = useCallback(
+  const handleAnularRequest = useCallback(
     (saleId: string) => setPending(sales.find((s) => s.id === saleId) ?? null),
     [sales]
   );
 
-  async function confirmDelete() {
+  async function confirmAnular(motivo: string) {
     const sale = pending;
     if (!sale) return;
     setPending(null);
-    onDeleted(sale.id);
+    onAnulada(sale.id, motivo);
 
     try {
-      await apiFetch(`/api/sales/${sale.id}`, { method: "DELETE" });
-      showToast("Venta borrada. El stock volvió al inventario.", "success");
+      await apiFetch(`/api/sales/${sale.id}/anular`, {
+        method: "POST",
+        body: JSON.stringify({ motivo }),
+      });
+      showToast("Venta anulada. El stock volvió al inventario.", "success");
     } catch (err) {
-      showToast(err instanceof ApiError ? err.message : "No se pudo borrar la venta", "error");
+      showToast(err instanceof ApiError ? err.message : "No se pudo anular la venta", "error");
       onReload();
     }
   }
@@ -60,19 +59,26 @@ export function SaleList({ sales, canDelete, onReload, onDeleted }: SaleListProp
   return (
     <div>
       {sales.map((sale) => (
-        <SaleRow key={sale.id} sale={sale} onDelete={canDelete ? handleDeleteRequest : undefined} />
+        <SaleRow key={sale.id} sale={sale} onAnular={canAnular ? handleAnularRequest : undefined} />
       ))}
 
       <ConfirmDialog
         open={pending !== null}
-        title="¿Borrar esta venta?"
+        title="¿Anular esta venta?"
         message={
           pending
-            ? `Se borra el ticket de ${formatCRC(pending.totalCent)} y las unidades vuelven al inventario. No se puede deshacer (queda registrada en la bitácora).`
+            ? `El ticket de ${formatCRC(pending.totalCent)} deja de contar y las unidades vuelven al inventario. La venta NO se borra: queda en el historial marcada como anulada, con tu nombre y el motivo.`
             : ""
         }
-        confirmLabel="Borrar venta"
-        onConfirm={confirmDelete}
+        prompt={{
+          label: "Motivo",
+          placeholder: "Ej. monto mal tecleado, ticket duplicado",
+          minLength: 6,
+          maxLength: 300,
+          helperText: "Queda guardado junto a la venta. Es lo que explica por qué bajó la cifra del mes.",
+        }}
+        confirmLabel="Anular venta"
+        onConfirm={confirmAnular}
         onCancel={() => setPending(null)}
       />
     </div>

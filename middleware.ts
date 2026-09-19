@@ -8,8 +8,21 @@ import {
   type SessionData,
 } from "@/lib/session";
 
-const PUBLIC_PATHS = ["/login"];
-const PUBLIC_API_PREFIXES = ["/api/auth/login", "/api/auth/logout", "/api/keepalive"];
+// "/socios" = landing pública B2B (docs/COPY_SOCIOS.md), sin login. Solo la
+// página en sí (no tiene subrutas); su API vive en /api/socios abajo.
+//
+// Lista EXACTA, no prefijos: coincidencia por `startsWith` dejaría pasar sin
+// sesión cualquier ruta futura que empiece igual (ej. "/api/sociosAdmin"
+// colaría con un prefijo "/api/socios") — auditoría de seguridad
+// 2026-08-16. Cada ruta pública nueva se agrega acá a mano.
+const PUBLIC_PATHS = ["/login", "/socios"];
+const PUBLIC_API_PATHS = [
+  "/api/auth/login",
+  "/api/auth/logout",
+  "/api/keepalive",
+  "/api/socios",
+  "/api/socios/avance",
+];
 
 /**
  * Chequeo GRUESO de sesión + bloqueo de /admin/** y /api/admin/** a no-admin.
@@ -28,7 +41,7 @@ export async function middleware(request: NextRequest) {
 
   if (
     PUBLIC_PATHS.includes(pathname) ||
-    PUBLIC_API_PREFIXES.some((p) => pathname.startsWith(p)) ||
+    PUBLIC_API_PATHS.includes(pathname) ||
     pathname.startsWith("/_next") ||
     isStaticAsset
   ) {

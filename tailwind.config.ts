@@ -50,6 +50,23 @@ const config: Config = {
           text: "#3E6B7D",
           bg: "#E6EEF1",
         },
+        // "Old-money navy" palette — landing pública B2B /socios (docs/COPY_SOCIOS.md).
+        // navy/cream reusan navy-900/cream-100 de arriba; bone/sand/brass/brassSoft
+        // son nuevos, definidos primero en _components/tokens.ts (animaciones) y
+        // promovidos acá para que el resto de /socios use el mismo sistema.
+        // Contraste verificado: brass sobre om-navy = 4.99:1 (AA texto). Sobre
+        // om-bone/om-cream, brass/brassSoft SOLO decorativo o texto grande (2.86:1,
+        // no pasa AA de cuerpo) — para texto/links sobre fondo claro usar
+        // `om-brass-ink`, derivado más oscuro (~5.3:1 sobre om-cream).
+        om: {
+          navy: "#0B0E30",
+          cream: "#E5E1D0",
+          bone: "#F6F3EA",
+          sand: "#C9BFA0",
+          brass: "#9C8046",
+          brassSoft: "#B79C63",
+          brassInk: "#6B562F",
+        },
       },
       fontFamily: {
         sans: [

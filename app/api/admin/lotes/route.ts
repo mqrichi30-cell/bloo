@@ -10,11 +10,16 @@ import { writeAudit } from "@/lib/audit";
 import { CUENTA_COGS, CUENTA_CXP } from "@/lib/conta";
 
 /**
- * Lote de compra de inventario: GLOBAL (no por modelo), costo pooled — ver
- * lib/lote.ts. Cada lote además le suma `unidades` al stock de UN modelo (el
- * bucket que las recibe: un modelo nombrado o "Sin especificar"). Si un mismo
- * envío físico se reparte entre varios modelos, se registra un lote por cada
- * reparto (simplificación deliberada; ver README).
+ * Lote de compra de inventario, ATADO al modelo que recibe sus unidades
+ * (`Lote.modelId`): además de sumarle `unidades` al stock de ese modelo, su
+ * costo entra en el promedio (CPPM) DE ESE MODELO y de ningún otro — ver
+ * lib/lote.ts. Si un mismo envío físico trae varios SKU, se registra un lote
+ * por SKU (así llegó la factura NHCR607272277300: una fila de lentes y una de
+ * estuches).
+ *
+ * `modelId` ya venía en el body desde siempre para sumar el stock; hasta la
+ * migración 20260816120000 no se GUARDABA, y por eso el costo se promediaba
+ * globalmente mezclando SKU de costo distinto.
  */
 
 class LoteError extends Error {
@@ -106,10 +111,18 @@ export async function POST(request: Request) {
 
       const pagadoFinal = pagado ?? false;
 
+      // El modelo se valida ANTES de crear el lote: con la FK
+      // `Lote.modelId -> Model.id`, un modelId inexistente reventaría el
+      // create con un error de constraint en vez del 404 que ya devolvía el
+      // update de stock de más abajo.
+      const modelo = await tx.model.findUnique({ where: { id: modelId }, select: { id: true } });
+      if (!modelo) throw new LoteError("Modelo no encontrado", 404);
+
       const lote = await tx.lote.create({
         data: {
           fecha: fechaLote,
           unidades,
+          modelId,
           costoTotalUsdCent,
           costoTotalCent,
           moneda: "USD",

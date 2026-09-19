@@ -23,11 +23,17 @@ interface DashboardResponse {
     ticketPromedioCent: number;
     utilidadDeltaCent: number;
     unidadesVendidas: number;
+    /** Costo de lo VENDIDO en el período, al costo promedio de cada producto. */
+    cogsCent: number;
+    /** ingresos − cogs. No es lo mismo que `utilidadCent` (ver disclaimer). */
+    margenBrutoCent: number;
   };
   /** Plata de bloo en manos de cada persona (saldo consolidado por cuenta raíz). */
   fondos: { id: string; nombre: string; saldoCent: number }[];
   barBuckets: { label: string; ventasCount: number; ingresosCent: number; gastosCent: number; utilidadCent: number }[];
   ranking: { modelId: string; nombre: string; cantidad: number }[];
+  /** Costo promedio ponderado por producto — reemplaza al viejo costo pooled único. */
+  costoPorSku: { modelId: string | null; nombre: string; costoUnitCent: number; unidadesCompradas: number }[];
   lowStock: { id: string; nombre: string; stockQty: number }[];
   lotesPorPagar: {
     id: string;
@@ -114,6 +120,49 @@ export function PanelView() {
             />
             <KPICard label="Pares vendidos" valueNumber={data.kpis.unidadesVendidas} format="number" />
           </div>
+
+          {/* Margen bruto: ventas − costo de LO VENDIDO, al costo promedio de
+              cada producto. Es una pregunta distinta a la del KPI "Utilidad"
+              (ventas − lo COMPRADO en el período), por eso va aparte y con su
+              propia explicación en vez de mezclarse en la grilla de arriba. */}
+          <section className="px-5 pb-4">
+            <div className="rounded-md bg-surface-alt px-4 py-3">
+              <div className="flex items-baseline justify-between gap-3">
+                <p className="text-label text-ink-600">Margen bruto de lo vendido</p>
+                <p className="shrink-0 tabular-nums text-data-lg text-ink-900">
+                  {formatCRC(data.kpis.margenBrutoCent)}
+                </p>
+              </div>
+              <p className="pt-1 text-caption text-ink-600">
+                {formatCRC(data.kpis.ingresosCent)} de ventas − {formatCRC(data.kpis.cogsCent)} de costo
+                {data.kpis.ingresosCent > 0
+                  ? ` · ${Math.round((data.kpis.margenBrutoCent / data.kpis.ingresosCent) * 100)} % sobre la venta`
+                  : ""}
+                .
+              </p>
+            </div>
+          </section>
+
+          {data.costoPorSku.length > 0 && (
+            <section className="px-5 pb-4">
+              <h2 className="pb-2 text-label text-ink-600">Costo por producto</h2>
+              <div className="flex flex-col gap-1.5">
+                {data.costoPorSku.map((sku) => (
+                  <div key={sku.modelId ?? "sin-asignar"} className="flex items-baseline justify-between gap-3">
+                    <span className="min-w-0 truncate text-body text-ink-900">{sku.nombre}</span>
+                    <span className="shrink-0 text-right">
+                      <span className="tabular-nums text-data-md text-ink-900">{formatCRC(sku.costoUnitCent)}</span>
+                      <span className="pl-1.5 text-caption text-ink-600">{sku.unidadesCompradas} u.</span>
+                    </span>
+                  </div>
+                ))}
+              </div>
+              <p className="pt-2 text-caption text-ink-600">
+                Promedio ponderado de los lotes de cada producto. Antes se mostraba un promedio único de
+                todo lo comprado, que no era el costo real de ninguno.
+              </p>
+            </section>
+          )}
 
           {/* Plata de bloo en manos de cada persona. Es un saldo ACUMULADO, no
               del período seleccionado: por eso va fuera de la grilla de KPIs y

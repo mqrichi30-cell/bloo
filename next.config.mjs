@@ -36,6 +36,10 @@ const securityHeaders = [
 ];
 
 const nextConfig = {
+  // Permite verificar con `next build` sin pisar el `.next` que está usando un
+  // `next dev` corriendo en la misma carpeta (dos tareas en paralelo sobre el
+  // mismo árbol). Sin la variable el valor es el de siempre.
+  distDir: process.env.NEXT_DIST_DIR || ".next",
   async headers() {
     return [
       {
@@ -43,9 +47,25 @@ const nextConfig = {
         headers: securityHeaders,
       },
       {
-        // financial/data routes: never cache
-        source: "/((?!_next/static|_next/image|favicon.ico).*)",
+        // financial/data routes: never cache. /api/socios/avance is the one
+        // deliberate exception (público, sin datos financieros, cacheado 1h
+        // — ver la regla siguiente) — se excluye acá en vez de ahí abajo
+        // para que esta regla amplia siga siendo la que manda por defecto.
+        source: "/((?!_next/static|_next/image|favicon.ico|api/socios/avance).*)",
         headers: [{ key: "Cache-Control", value: "no-store" }],
+      },
+      {
+        // Único endpoint público cacheable de la app: contador de avance de
+        // /socios. Sin esto, esta regla general de arriba lo pisaba con
+        // no-store y el `revalidate`/Data Cache de la ruta no servía de nada
+        // en el borde/CDN (auditoría de seguridad 2026-08-16).
+        source: "/api/socios/avance",
+        headers: [
+          {
+            key: "Cache-Control",
+            value: "public, max-age=0, s-maxage=3600, stale-while-revalidate=86400",
+          },
+        ],
       },
     ];
   },

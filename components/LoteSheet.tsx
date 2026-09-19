@@ -20,10 +20,11 @@ interface LoteSheetProps {
 }
 
 /**
- * Registra un Lote de compra: costo GLOBAL/pooled (no por par), en USD +
- * tipo de cambio vigente, y le suma `unidades` al stock de UN modelo/bucket
- * elegido (simplificación: si un envío real se reparte entre varios modelos,
- * se registra un lote por cada reparto — ver README).
+ * Registra un Lote de compra: costo TOTAL del lote (no por par), en USD + tipo
+ * de cambio vigente, atado al modelo/bucket elegido — le suma `unidades` a su
+ * stock Y entra en el promedio de costo DE ESE MODELO (`Lote.modelId`). Si un
+ * envío real trae varios SKU, se registra un lote por SKU: es lo que mantiene
+ * separados los costos (un lente y un estuche no cuestan lo mismo).
  */
 export function LoteSheet({ open, onClose, onSuccess, tipoCambioUsdCent, diaCorteTarjeta }: LoteSheetProps) {
   const { showToast } = useToast();

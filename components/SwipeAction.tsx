@@ -1,22 +1,28 @@
 "use client";
 
-import { useRef, useState } from "react";
-import { Trash2 } from "lucide-react";
+import { useRef, useState, type ReactNode } from "react";
 
 const ACTION_WIDTH = 88; // px que se revelan al deslizar
 const OPEN_THRESHOLD = ACTION_WIDTH / 2;
 const AXIS_LOCK = 8; // px de movimiento antes de decidir si el gesto es horizontal
 
-interface SwipeToDeleteProps {
-  children: React.ReactNode;
-  onDelete: () => void;
-  /** Para lectores de pantalla: "Borrar venta de ₡15.000", etc. */
-  deleteLabel: string;
+interface SwipeActionProps {
+  children: ReactNode;
+  onAction: () => void;
+  /** Para lectores de pantalla: "Anular venta de ₡15.000 del 12 ago", etc. */
+  actionLabel: string;
+  /** Icono de la acción revelada. */
+  icon: ReactNode;
   disabled?: boolean;
 }
 
 /**
- * Fila deslizable: se arrastra a la izquierda y aparece un basurero.
+ * Fila deslizable: se arrastra a la izquierda y aparece un botón de acción.
+ *
+ * Antes se llamaba `SwipeToDelete` y traía el basurero clavado adentro. Se
+ * generalizó cuando el borrado de ventas se reemplazó por anulación: el gesto
+ * es el mismo, pero la acción ya no borra nada, y un componente que se llama
+ * "borrar" invita a volver a borrar.
  *
  * Detalle que hace o rompe esto en celular: el gesto arranca SIN bloquear el
  * scroll vertical. Hasta que el dedo no se mueve `AXIS_LOCK` px, no se decide
@@ -24,7 +30,7 @@ interface SwipeToDeleteProps {
  * scrollea normal. Solo cuando el eje queda en horizontal se hace
  * `setPointerCapture` y se toma el control del gesto.
  */
-export function SwipeToDelete({ children, onDelete, deleteLabel, disabled = false }: SwipeToDeleteProps) {
+export function SwipeAction({ children, onAction, actionLabel, icon, disabled = false }: SwipeActionProps) {
   const [offset, setOffset] = useState(0);
   const [open, setOpen] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -84,16 +90,16 @@ export function SwipeToDelete({ children, onDelete, deleteLabel, disabled = fals
       <div className="absolute inset-y-0 right-0 flex items-stretch">
         <button
           type="button"
-          aria-label={deleteLabel}
+          aria-label={actionLabel}
           tabIndex={open ? 0 : -1}
           onClick={() => {
             close();
-            onDelete();
+            onAction();
           }}
           style={{ width: ACTION_WIDTH }}
           className="flex items-center justify-center bg-error-text text-white transition-transform active:scale-[0.97]"
         >
-          <Trash2 size={20} />
+          {icon}
         </button>
       </div>
 

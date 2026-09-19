@@ -14,6 +14,20 @@
   --ink-900: #1a1d24;
   --ink-600: #55585f;
   --focus-ring: rgba(62, 107, 125, 0.35);
+
+  /* "Old-money navy" — landing pública B2B /socios (docs/COPY_SOCIOS.md).
+     Espejo de tailwind.config.ts `om.*`, para uso en CSS plano (ver
+     _components/tokens.ts, la fuente original de estos valores). */
+  --om-navy: #0b0e30;
+  --om-cream: #e5e1d0;
+  --om-bone: #f6f3ea;
+  --om-sand: #c9bfa0;
+  --om-brass: #9c8046;
+  --om-brass-soft: #b79c63;
+  /* Texto-seguro sobre fondo claro: brass/brassSoft crudos solo pasan AA
+     decorativo/grande sobre om-bone/om-cream (2.86:1) — para cuerpo/links
+     ahí, usar este derivado más oscuro (~5.3:1 sobre om-cream). */
+  --om-brass-ink: #6b562f;
 }
 
 * {
@@ -74,5 +88,28 @@ p {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+}
+
+/* Reveal on scroll — progressive enhancement, no JS.
+   Default (no @supports match / reduced motion) is fully visible: content
+   never depends on this to render. Used on /socios (landing pública B2B). */
+@media (prefers-reduced-motion: no-preference) {
+  @supports (animation-timeline: view()) {
+    .reveal {
+      animation: reveal-in linear both;
+      animation-timeline: view();
+      animation-range: entry 0% cover 30%;
+    }
+    @keyframes reveal-in {
+      from {
+        opacity: 0;
+        transform: translateY(24px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
   }
 }

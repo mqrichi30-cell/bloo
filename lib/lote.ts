@@ -7,18 +7,63 @@ import { getAppConfig } from "./config";
 // una venta (consistencia bajo concurrencia).
 type PrismaOrTx = PrismaClient | Prisma.TransactionClient;
 
+export interface CostoUnitarioSku {
+  /** null = pool "sin asignar" (lotes anteriores a la migración por SKU). */
+  modelId: string | null;
+  unidades: number;
+  costoTotalCent: number;
+  costoUnitCent: number;
+}
+
 /**
- * Costo unitario POOLED: SUM(Lote.costoTotalCent) / SUM(Lote.unidades) sobre
- * TODOS los lotes (son inmutables, no se "cierran" ni se decrementan — el
- * pool es el promedio de todo lo comprado, prorrateado igual a cada venta).
+ * CPPM (costo promedio ponderado móvil) POR SKU:
+ * SUM(Lote.costoTotalCent) / SUM(Lote.unidades) sobre los lotes DE ESE MODELO.
+ * Los lotes son inmutables — no se "cierran" ni se decrementan; el promedio es
+ * el de todo lo comprado de ese SKU.
+ *
+ * Antes esto promediaba TODOS los lotes juntos y le cobraba el mismo costo a
+ * cualquier ítem. Con SKU de costo distinto conviviendo (lentes ₡1.629,13 vs
+ * estuches ₡1.946,08) ese promedio único distorsiona el costo y el margen de
+ * los dos a la vez. Ver la nota de costeo en prisma/schema.prisma.
  */
-export async function getPooledUnitCostCent(client: PrismaOrTx): Promise<number> {
-  const agg = await client.lote.aggregate({
+export async function getCostosUnitariosPorSku(client: PrismaOrTx): Promise<CostoUnitarioSku[]> {
+  const grupos = await client.lote.groupBy({
+    by: ["modelId"],
     _sum: { costoTotalCent: true, unidades: true },
   });
-  const totalCostCent = agg._sum.costoTotalCent ?? 0;
-  const totalUnidades = agg._sum.unidades ?? 0;
-  return averageCostCent(totalCostCent, totalUnidades);
+  return grupos.map((g) => {
+    const costoTotalCent = g._sum.costoTotalCent ?? 0;
+    const unidades = g._sum.unidades ?? 0;
+    return {
+      modelId: g.modelId,
+      unidades,
+      costoTotalCent,
+      costoUnitCent: averageCostCent(costoTotalCent, unidades),
+    };
+  });
+}
+
+/**
+ * Costo unitario a "cobrarle" a cada modelo vendido. Cascada deliberada:
+ *
+ *  1. Lotes propios del modelo → su CPPM.
+ *  2. Si el modelo nunca recibió un lote, el pool SIN ASIGNAR (`modelId=null`,
+ *     filas anteriores a la migración 20260816120000). Es inventario comprado
+ *     que nadie atribuyó a un SKU, así que sirve de piso.
+ *  3. Si tampoco hay, 0.
+ *
+ * Lo que NUNCA se hace es caer al promedio global de todos los lotes: eso es
+ * exactamente el defecto que esta función existe para no repetir. Un 0 es
+ * visible y auditable; un promedio contaminado se ve razonable y miente.
+ */
+export async function getUnitCostByModelCent(
+  client: PrismaOrTx,
+  modelIds: string[]
+): Promise<Map<string, number>> {
+  const costos = await getCostosUnitariosPorSku(client);
+  const porModelo = new Map(costos.filter((c) => c.modelId).map((c) => [c.modelId!, c.costoUnitCent]));
+  const sinAsignar = costos.find((c) => c.modelId === null)?.costoUnitCent ?? 0;
+  return new Map(modelIds.map((id) => [id, porModelo.get(id) ?? sinAsignar]));
 }
 
 export async function getTipoCambioUsdCent(client: PrismaOrTx): Promise<number> {

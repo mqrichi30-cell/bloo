@@ -85,8 +85,8 @@ cambios adicionales.
   mutación sin el header → 403.
 - **Venta = TICKET + ítems (no 1 modelo por venta)**: `Sale` es el ticket (un monto total
   tecleado por Cris, NO por par) y `SaleItem` es cada modelo+cantidad dentro de ese ticket
-  (`prisma/schema.prisma`). El costo pooled se snapshotea UNA vez por ticket y se reparte
-  igual en cada `SaleItem.costoUnitSnapshotCent`; `COGS del ticket = SUM(item.cogsLineCent)`,
+  (`prisma/schema.prisma`). Cada `SaleItem` se snapshotea al costo promedio DE SU MODELO
+  (`SaleItem.costoUnitSnapshotCent`); `COGS del ticket = SUM(item.cogsLineCent)`,
   `utilidad = base - COGS`. El stock de CADA modelo del ticket se descuenta con guard atómico
   dentro de la misma transacción — si un solo ítem excede stock, se rechaza el ticket
   COMPLETO (nada queda a medias). Probado en vivo con un ticket de 2 modelos + verificado que
@@ -96,20 +96,33 @@ cambios adicionales.
   `SaleItem` ni `cogsCent`/`utilidadCent` de un `Sale`. Verificado en vivo con `curl`
   comparando la respuesta de `/api/sales` como admin vs. vendedor. Acceso directo de
   vendedor a `/api/admin/**` → 403 (middleware + re-chequeo en cada handler).
-- **Costeo POOLED por lote (no por modelo/par)**: el costo vive en `Lote` (`prisma/schema.prisma`),
-  global e inmutable — nunca atado a un modelo específico. `costoUnitPooledCent =
-  SUM(Lote.costoTotalCent) / SUM(Lote.unidades)` (ver `lib/lote.ts`), se recalcula al vuelo y
-  se prorratea igual a CUALQUIER venta, sin importar qué modelo se vendió. `Model` ya no
-  guarda ningún campo de costo. El tipo de cambio USD→₡ (`AppConfig.tipoCambioUsdCent`, default
-  ₡510.00, editable en Perfil admin) deriva `Lote.costoTotalCent` desde
-  `Lote.costoTotalUsdCent` — marcado como ESTIMADO en la UI hasta confirmar el estado de
-  cuenta real.
-- **Dinero**: todo entero en céntimos. `lib/money.ts` deriva IVA (13%) y el promedio pooled
-  sin nunca guardarlo ya redondeado. El snapshot de costo se toma ANTES de descontar el stock
-  de la venta, dentro de la misma transacción.
+- **Costeo CPPM POR SKU (no por par, no global)**: el costo vive en `Lote`
+  (`prisma/schema.prisma`), inmutable, atado al modelo que recibió sus unidades
+  (`Lote.modelId`). El costo unitario de un modelo es
+  `SUM(Lote.costoTotalCent) / SUM(Lote.unidades)` **de los lotes de ese modelo**
+  (`lib/lote.ts#getUnitCostByModelCent`), recalculado al vuelo. `Model` no guarda ningún campo
+  de costo. El tipo de cambio USD→₡ (`AppConfig.tipoCambioUsdCent`, editable en Perfil admin)
+  deriva `Lote.costoTotalCent` desde `Lote.costoTotalUsdCent` — ESTIMADO mientras el lote no
+  esté pagado; al pagarse se congela en `Lote.tipoCambioPagoCent` y deja de flotar.
+  Hasta el 16-ago-2026 el pool era GLOBAL: promediaba lentes (₡1.629,13/u) y estuches
+  (₡1.946,08/u) en un solo ₡1.746,40 y se lo cobraba a los dos. Ver la auditoría en
+  `docs/METAS_UMBRALES.md` §1.4 y la migración `20260816120000_lote_por_sku_y_comision_medio_pago`.
+- **Comisión de medio de pago**: `Cuenta.comisionBps` (puntos básicos, entero) en cada cuenta
+  con `esMedioPago`. Una venta cobrada por ese medio asienta `Debe [medio] = cobrado − comisión`
+  + `Debe 5-2-002 Comisión datáfono`. Default **0** = sin tarifa confirmada = no se asienta
+  comisión; nunca se hardcodea un porcentaje. Editable en /conta → Cuentas.
+- **Dinero**: todo entero en céntimos (y las tasas en puntos básicos enteros). `lib/money.ts`
+  deriva IVA (13%) y los promedios sin nunca guardarlos ya redondeados. El snapshot de costo se
+  toma ANTES de descontar el stock de la venta, dentro de la misma transacción.
 - **Validación dura de stock**: una venta que exceda `stockQty - stockReservado` se rechaza
-  con 400 (probado en vivo, incluida concurrencia real). Ventas y lotes son append-only (solo
-  `POST`/`GET`, sin `PUT`/`DELETE`).
+  con 400 (probado en vivo, incluida concurrencia real).
+- **Ventas append-only, con dientes**: no hay `DELETE`. Un ticket mal tecleado se anula con
+  `POST /api/sales/[id]/anular` (`motivo` obligatorio): la fila se queda en `estado='anulada'`
+  con autor y fecha, el stock vuelve y el asiento se contra-asienta. Un trigger `BEFORE DELETE`
+  en `Sale`/`SaleItem` aborta cualquier borrado, venga de la app, de un script o de una consola
+  SQL. Qué venta cuenta para las cifras lo define un solo módulo (`lib/sale-estado.ts`),
+  compartido por el Panel, la pantalla de Vender y la métrica pública de `/socios`.
+  Historia del cierre: `docs/AUDITORIA_VENTAS_BORRADAS.md`.
 - **Tipo de cambio automático (BAC vía BCCR)**: `lib/tipo-cambio-bac.ts` hace fetch server-side
   (nunca desde el cliente) a la página de ventanilla del BCCR, parsea con `cheerio` la fila
   "Banco BAC San José S.A." y toma la columna Venta. Refresh **lazy**: al cargar
@@ -147,11 +160,11 @@ cambios adicionales.
   hoy, bottom sheet de nueva venta en 3 taps), Ventas (historial), Modelos (grid + búsqueda,
   8 modelos reales con foto + "Sin especificar" para pares sin identificar), Detalle/editar
   modelo (foto, precio, categoría, descripción, stock, activo/descontinuado — ya no hay costo
-  a nivel de modelo, ver costeo pooled), Inventario (admin: registrar lote de compra + stock
-  por modelo + costo unitario pooled visible + stub de reservados), Panel (admin: KPIs 2×2
-  con count-up, aviso "Por pagar" de lotes sin pagar, gráfico de barras, ranking por modelo,
-  alerta de stock bajo, disclaimer de utilidad literal del spec fiscal), Perfil (tipo de
-  cambio USD editable para admin, logout).
+  a nivel de modelo, ver costeo CPPM por SKU), Inventario (admin: registrar lote de compra +
+  stock por modelo + costo unitario POR PRODUCTO + stub de reservados), Panel (admin: KPIs 2×2
+  con count-up, margen bruto de lo vendido, costo por producto, aviso "Por pagar" de lotes sin
+  pagar, gráfico de barras, ranking por modelo, alerta de stock bajo, disclaimer de utilidad
+  literal del spec fiscal), Perfil (tipo de cambio USD editable para admin, logout).
 - **Reservas**: soporte de datos listo (`Reserva`, `Model.stockReservado`,
   `/api/admin/reservas`) para apartar stock sin contar como ingreso hasta entregar, pero
   **sin UI de creación ni flujo de conversión a venta** — Cris no definió la cantidad todavía

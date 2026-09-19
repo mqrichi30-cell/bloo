@@ -11,6 +11,7 @@ import { SaleSheet } from "@/components/SaleSheet";
 import { useRole } from "@/components/RoleProvider";
 import { apiFetch } from "@/lib/api-client";
 import { formatCRC } from "@/lib/money";
+import { cuentaParaCifras, SALE_ESTADO_ANULADA } from "@/lib/sale-estado";
 
 function greeting(): string {
   const hour = new Date().getHours();
@@ -50,11 +51,26 @@ export default function VenderPage() {
     load();
   }, [load]);
 
-  const removeLocal = useCallback((saleId: string) => {
-    setSales((prev) => prev?.filter((s) => s.id !== saleId) ?? prev);
+  // La venta anulada NO se saca de la lista: se marca. Antes se borraba del
+  // estado local porque también se borraba de la base; ahora la fila sigue
+  // existiendo y el historial tiene que mostrarla tachada.
+  const marcarAnulada = useCallback((saleId: string, motivo: string) => {
+    setSales(
+      (prev) =>
+        prev?.map((s) =>
+          s.id === saleId ? { ...s, estado: SALE_ESTADO_ANULADA, anulacionMotivo: motivo } : s
+        ) ?? prev
+    );
   }, []);
 
-  const hoy = useMemo(() => (sales ?? []).filter((s) => esHoy(s.fecha)), [sales]);
+  // El resumen de hoy usa el MISMO criterio que el Panel y que la métrica
+  // pública (lib/sale-estado.ts). Sin esto, una venta anulada seguiría
+  // contando en "Hoy: 3 ventas · ₡45.000" aunque el Panel ya la hubiera
+  // sacado, y los dos números del mismo día se contradirían en pantalla.
+  const hoy = useMemo(
+    () => (sales ?? []).filter((s) => esHoy(s.fecha) && cuentaParaCifras(s.estado)),
+    [sales]
+  );
   const totalHoyCent = useMemo(() => hoy.reduce((sum, s) => sum + s.totalCent, 0), [hoy]);
 
   return (
@@ -82,7 +98,7 @@ export default function VenderPage() {
 
       <section className="mt-2">
         <h2 className="px-5 pb-2 text-label text-ink-600">
-          {role === "admin" ? "Historial — deslizá para borrar" : "Historial"}
+          {role === "admin" ? "Historial — deslizá para anular" : "Historial"}
         </h2>
 
         {sales === null && (
@@ -106,9 +122,9 @@ export default function VenderPage() {
         {sales !== null && sales.length > 0 && (
           <SaleList
             sales={sales}
-            canDelete={role === "admin"}
+            canAnular={role === "admin"}
             onReload={load}
-            onDeleted={removeLocal}
+            onAnulada={marcarAnulada}
           />
         )}
       </section>

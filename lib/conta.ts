@@ -22,6 +22,14 @@ export const CUENTA_CXP = "2-1-001"; // Cuentas por pagar proveedores
 // gasto (naturaleza deudora): Debe = pérdida cambiaria, Haber = ganancia.
 export const CUENTA_DIFERENCIAL_CAMBIARIO = "5-2-003";
 
+// Comisión que retiene el procesador de tarjetas sobre lo cobrado por
+// datáfono. La TASA no vive acá: vive en `Cuenta.comisionBps` de cada medio de
+// pago (ver schema.prisma), porque cambia por adquirente y por contrato y
+// hardcodearla sería inventar un número que nadie confirmó. Esta constante es
+// solo el destino contable del gasto. El cálculo está en lib/comision.ts
+// (módulo puro, compartido con los componentes cliente).
+export const CUENTA_COMISION_DATAFONO = "5-2-002";
+
 // Naturaleza estándar por tipo (deudora crece con Debe; acreedora con Haber).
 export function naturalezaDeTipo(tipo: string): "deudora" | "acreedora" {
   return tipo === "activo" || tipo === "gasto" ? "deudora" : "acreedora";

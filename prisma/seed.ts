@@ -161,8 +161,14 @@ async function main() {
   const costoTotalCent = deriveLoteCostoTotalCent(costoTotalUsdCent, config.tipoCambioUsdCent);
   const fechaCompraLote1 = new Date(2026, 6, 3);
   const fechaVencimientoLote1 = computeFechaVencimientoPago(fechaCompraLote1, config.diaCorteTarjeta);
+  // Este lote va SIN `modelId` a propósito, y es el único caso legítimo: sus
+  // 23 unidades se reparten entre los 8 modelos nombrados y "Sin especificar",
+  // así que no hay un SKU al cual atribuirlo. Cae al pool "sin asignar" de
+  // lib/lote.ts#getUnitCostByModelCent, que es exactamente para esto. Los
+  // lotes reales SÍ llevan modelId (uno por SKU, ver schema.prisma).
+  //
   // Idempotente: no dupliques el lote si el seed se re-corre (duplicarlo
-  // corrompería el costo promedio pooled).
+  // corrompería el costo promedio).
   let lote1 = await prisma.lote.findFirst({ where: { fecha: fechaCompraLote1, unidades: 23 } });
   if (!lote1) {
     lote1 = await prisma.lote.create({

@@ -1,0 +1,274 @@
+/*
+ * BarraAvance — varilla de acetato renderizada en SVG. Resolución
+ * independiente por definición: nítida en cualquier pantalla y cualquier
+ * zoom, sin las caras facetadas que se veían "blocadas" en la versión de
+ * CSS 3D girado.
+ *
+ * Historial de rechazos, no se repiten:
+ * - 1ª vuelta: etiquetas ancladas por altura sobre la cápsula, se
+ *   encimaban. Fix permanente: cero texto posicionado por altura sobre la
+ *   varilla — toda etiqueta vive en `.stats`.
+ * - 2ª vuelta: panel navy de fondo + caras de CSS 3D giradas (el canto
+ *   leía como una franja plana pegada, un segundo objeto). Fix: sin panel
+ *   — la sección vive sobre el fondo claro de la página, el único navy de
+ *   toda la sección es esta varilla — y sin geometría rotada: el volumen
+ *   es enteramente un degradado horizontal (sombra → brillo especular →
+ *   sombra) que simula la curvatura de un cilindro. Canal (navy) y
+ *   llenado (latón) comparten la misma estructura de paradas de color
+ *   para leerse como una sola pieza bajo una sola luz.
+ *
+ * Anima solo transform/opacity. Dispara una sola vez al entrar en
+ * viewport (clase .inView, agregada por BarraAvance.tsx). Un único
+ * barrido de luz al llenar, nunca un loop ambiental (eso es el patrón
+ * prohibido de "dark mode con neón").
+ */
+
+.root {
+  container-type: inline-size;
+  width: 100%;
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.75rem;
+}
+
+@container (min-width: 380px) {
+  .body {
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-start;
+    gap: clamp(2rem, 7cqw, 3rem);
+    text-align: left;
+  }
+}
+
+/* ---------- la varilla (SVG) ---------- */
+
+.rodStage {
+  width: clamp(3.5rem, 15cqw, 4.5rem);
+  height: clamp(200px, 30vh, 280px);
+  flex-shrink: 0;
+  /* Sombra de apoyo, product-shot: ancla la pieza al fondo claro de la
+     página. Navy translúcida, no negro puro — sigue el token de sombra
+     que ya usa el resto del sitio. */
+  filter: drop-shadow(0 14px 20px rgba(11, 14, 48, 0.16)) drop-shadow(0 3px 6px rgba(11, 14, 48, 0.12));
+}
+
+.svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+  overflow: visible;
+}
+
+.fillGroup {
+  transform-box: fill-box;
+  transform-origin: bottom center;
+  transform: scaleY(0);
+  transition: transform 1.05s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.inView .fillGroup {
+  transform: scaleY(1);
+}
+
+/* barrido de luz: una sola pasada al llenar, nunca un loop ambiental */
+.sweep {
+  transform-box: fill-box;
+  transform-origin: center;
+  transform: translateY(48%);
+  opacity: 0;
+}
+
+.inView .sweep {
+  animation: sweepPass 1.3s cubic-bezier(0.16, 1, 0.3, 1) 0.3s 1 both;
+}
+
+@keyframes sweepPass {
+  0% {
+    transform: translateY(48%);
+    opacity: 0;
+  }
+  35% {
+    opacity: 0.55;
+  }
+  100% {
+    transform: translateY(-48%);
+    opacity: 0;
+  }
+}
+
+/* ---------- mes en curso: una marca, sin texto flotante ---------- */
+
+.cursoNotch {
+  transform-box: fill-box;
+  transform-origin: center;
+  transform: scale(0);
+  transition: transform 0.5s cubic-bezier(0.16, 1, 0.3, 1) 0.55s;
+}
+
+.inView .cursoNotch {
+  transform: scale(1);
+}
+
+/* ---------- stats: pila de texto, nunca posicionada por altura ---------- */
+
+.stats {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+  align-items: center;
+  text-align: center;
+}
+
+@container (min-width: 380px) {
+  .stats {
+    align-items: flex-start;
+    text-align: left;
+  }
+}
+
+.kicker {
+  margin: 0;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+/* tone="navy": texto claro, para montarse sobre un fondo oscuro */
+[data-tone="navy"] .kicker {
+  color: #c9bfa0;
+}
+
+/* tone="bone": texto tinta navy, para montarse sobre el fondo claro de la
+   página (uso real actual: /socios ya no tiene panel oscuro). Contraste
+   verificado sobre om-cream (#E5E1D0): ver notas de opacidad abajo. */
+[data-tone="bone"] .kicker {
+  color: rgba(11, 14, 48, 0.72);
+}
+
+.bigNumber {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  font-family: var(--font-om-serif), "Iowan Old Style", "Sitka Text", Georgia, "Times New Roman",
+    serif;
+  font-size: clamp(2.5rem, 3.5vw + 1rem, 3.5rem);
+  line-height: 1;
+}
+
+[data-tone="navy"] .bigNumber {
+  color: #f6f3ea;
+}
+
+[data-tone="bone"] .bigNumber {
+  color: #0b0e30;
+}
+
+.bigNumberOf {
+  font-family: inherit;
+  font-size: clamp(0.9375rem, 0.6vw + 0.8rem, 1.125rem);
+}
+
+[data-tone="navy"] .bigNumberOf {
+  opacity: 0.65;
+}
+
+/* Sobre cream, opacity puro se acerca peligroso a 4.5:1 en tonos bajos
+   (0.6 de navy sobre om-cream mide ~4.58:1, un margen demasiado fino).
+   0.75 mide bien por encima — ver contraste del kicker arriba. */
+[data-tone="bone"] .bigNumberOf {
+  opacity: 0.75;
+}
+
+.bigNumberEmpty {
+  margin: 0;
+  font-family: var(--font-om-serif), "Iowan Old Style", "Sitka Text", Georgia, "Times New Roman",
+    serif;
+  font-size: clamp(1.375rem, 1.4vw + 1rem, 1.75rem);
+  line-height: 1.2;
+}
+
+[data-tone="navy"] .bigNumberEmpty {
+  color: #f6f3ea;
+}
+
+[data-tone="bone"] .bigNumberEmpty {
+  color: #0b0e30;
+}
+
+.caption {
+  margin: 0;
+  font-size: 0.8125rem;
+}
+
+[data-tone="navy"] .caption {
+  color: rgba(229, 225, 208, 0.6);
+}
+
+[data-tone="bone"] .caption {
+  color: rgba(11, 14, 48, 0.68);
+}
+
+.subline {
+  margin: 0.125rem 0 0;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.8125rem;
+}
+
+[data-tone="navy"] .subline {
+  color: rgba(229, 225, 208, 0.72);
+}
+
+[data-tone="bone"] .subline {
+  color: rgba(11, 14, 48, 0.72);
+}
+
+.sublineDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  border: 1.5px dashed #b79c63;
+  flex-shrink: 0;
+}
+
+.sublineDot[data-warm="true"] {
+  border-style: solid;
+  background: #6b562f;
+}
+
+[data-tone="navy"] .sublineDot[data-warm="true"] {
+  background: #f6f3ea;
+  box-shadow: 0 0 6px rgba(246, 243, 234, 0.6);
+}
+
+/* ---------- reduced motion: estado final directo ---------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .fillGroup,
+  .sweep,
+  .cursoNotch {
+    transition: none !important;
+    animation: none !important;
+  }
+
+  .fillGroup {
+    transform: scaleY(1);
+  }
+
+  .sweep {
+    opacity: 0;
+  }
+
+  .cursoNotch {
+    transform: scale(1);
+  }
+}

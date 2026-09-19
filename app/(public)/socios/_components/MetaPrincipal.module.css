@@ -1,0 +1,138 @@
+/*
+ * MetaPrincipal — bloque protagonista de /socios (#meta-1).
+ *
+ * 3ª vuelta, 2026-08-16: el dueño rechazó el panel navy que envolvía todo
+ * el bloque ("quiero que este cuadro azul deje de existir, lo único azul
+ * debe ser la barra"). Sin panel: sin fondo propio, sin borde, sin
+ * padding de tarjeta. El bloque vive directo sobre el fondo claro de la
+ * sección (om-cream, ver MetaUno.tsx) — el único navy de toda la sección
+ * es el canal de <BarraAvance/>. Todo el texto que antes era claro sobre
+ * navy se invirtió a tinta navy sobre claro:
+ *
+ * - .kicker, .statusPill: rgba(navy, .8-.85) sobre om-cream — muy por
+ *   encima de 4.5:1 (navy casi sólido sobre un fondo claro).
+ * - .promesa: navy/90, la misma opacidad que ya usa el resto de esta
+ *   sección para cuerpo de texto (ver MetaUno.tsx parrafo1-3) — consistente
+ *   con el resto de la página, no un tono inventado acá.
+ * - .emptyHeadline/.emptyClose: navy sólido (eran #f6f3ea sólido sobre
+ *   navy; el equivalente sobre claro es navy sólido, no un gris).
+ *
+ * Anima únicamente opacity/transform. Dispara una sola vez por scroll (la
+ * clase .inView la agrega MetaPrincipal.tsx vía IntersectionObserver).
+ */
+
+.root {
+  position: relative;
+  width: 100%;
+  max-width: 640px;
+  margin-inline: auto;
+
+  opacity: 0;
+  transform: translateY(14px);
+  transition: opacity 0.6s cubic-bezier(0.16, 1, 0.3, 1),
+    transform 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.root.inView {
+  opacity: 1;
+  transform: none;
+}
+
+.root__inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.5rem;
+  text-align: center;
+}
+
+.kicker {
+  margin: 0;
+  font-size: clamp(0.9375rem, 0.5vw + 0.85rem, 1.0625rem);
+  font-weight: 500;
+  color: rgba(11, 14, 48, 0.7);
+  max-width: 46ch;
+}
+
+.barra {
+  width: 100%;
+}
+
+.statusPill {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: rgba(11, 14, 48, 0.85);
+}
+
+.statusDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: #6b562f;
+  flex-shrink: 0;
+}
+
+.statusPill[data-estado="cumplido"] .statusDot {
+  background: #0b0e30;
+}
+
+.promesa {
+  margin: 0;
+  max-width: 52ch;
+  font-size: clamp(0.9375rem, 0.4vw + 0.85rem, 1.0625rem);
+  line-height: 1.6;
+  color: rgba(11, 14, 48, 0.9);
+}
+
+/* ---------- estado sin datos: mismo peso, mismo espacio ---------- */
+
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  align-items: center;
+  width: 100%;
+}
+
+.emptyHeadline {
+  margin: 0;
+  font-family: var(--font-om-serif), "Iowan Old Style", "Sitka Text", Georgia, "Times New Roman",
+    serif;
+  font-size: clamp(1.5rem, 1.6vw + 1.1rem, 2.125rem);
+  line-height: 1.2;
+  font-weight: 500;
+  color: #0b0e30;
+  max-width: 22ch;
+}
+
+.emptyBody {
+  margin: 0;
+  max-width: 52ch;
+  font-size: clamp(0.9375rem, 0.4vw + 0.85rem, 1.0625rem);
+  line-height: 1.6;
+  color: rgba(11, 14, 48, 0.9);
+}
+
+.emptyClose {
+  margin: 0;
+  max-width: 52ch;
+  font-size: clamp(0.9375rem, 0.4vw + 0.85rem, 1.0625rem);
+  line-height: 1.6;
+  font-weight: 600;
+  color: #0b0e30;
+}
+
+/* ---------- reduced motion: show the final state directly ---------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .root {
+    transition: none !important;
+    opacity: 1;
+    transform: none;
+  }
+}

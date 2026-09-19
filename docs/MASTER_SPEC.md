@@ -18,7 +18,7 @@ Este documento es la fuente única de verdad. Consolida 5 specs (UX, Seguridad, 
 | Roles | `vendedor`: registrar venta, ver sus ventas, ver modelos (SIN costo/margen). `admin`: todo + inventario/compras + finanzas |
 | Compras inventario | **Solo admin** |
 | Stock negativo | Prohibido. Validación dura server-side |
-| Inmutabilidad | Ventas y compras append-only. Correcciones = devolución/ajuste con log. Nunca editar fila histórica silenciosamente |
+| Inmutabilidad | Ventas y compras append-only, con trigger `BEFORE DELETE` en Postgres. Correcciones: devolución (`Return`) si volvió mercadería, anulación (`Sale.estado='anulada'` + motivo/autor/fecha) si el ticket no debió existir. Nunca editar ni borrar fila histórica |
 | Moneda display | `Intl.NumberFormat('es-CR', {style:'currency', currency:'CRC'})`, `tabular-nums` |
 | Ticket promedio | Por transacción (no por unidad) |
 

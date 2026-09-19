@@ -19,7 +19,8 @@ interface AppConfig {
 
 interface ConfigResponse {
   config: AppConfig;
-  costoUnitPooledCent: number;
+  /** Costo promedio ponderado por producto (se muestra en Inventario). */
+  costoPorSku: { modelId: string | null; nombre: string; costoUnitCent: number; unidadesCompradas: number }[];
 }
 
 function formatActualizado(iso: string | null): string {

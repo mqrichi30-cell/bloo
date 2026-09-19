@@ -53,6 +53,26 @@ export const loteCreateSchema = z.object({
   tipoCambioUsdCentOverride: z.number().int().positive().max(1_000_000).optional(),
 });
 
+/**
+ * Comisión de un medio de pago en PUNTOS BÁSICOS (350 = 3,50 %). Entero, como
+ * todo lo monetario. Tope 2000 bps (20 %): ningún adquirente cobra eso, así que
+ * un valor mayor es un dedazo (escribir "350" pensando en 3,5 y equivocarse de
+ * unidad da 35000, no 2001 — el tope corta ese caso). El 0 es válido y es el
+ * default: significa "sin tarifa confirmada, no asentar comisión".
+ */
+export const comisionBpsSchema = z
+  .number()
+  .int("La comisión se guarda en puntos básicos enteros")
+  .min(0, "La comisión no puede ser negativa")
+  .max(2000, "Una comisión mayor al 20% no es creíble; revisá las unidades (350 = 3,50%)");
+
+// Editar una cuenta existente. Hoy solo la comisión: el resto del plan de
+// cuentas (código, tipo, naturaleza, jerarquía) es estructural y cambiarlo
+// después de tener asientos rompe la comparabilidad entre períodos.
+export const cuentaUpdateSchema = z.object({
+  comisionBps: comisionBpsSchema,
+});
+
 export const configUpdateSchema = z
   .object({
     tipoCambioUsdCent: z.number().int().positive().max(1_000_000),
@@ -94,6 +114,57 @@ export const saleCreateSchema = z.object({
   // Cuenta contable (esMedioPago=true) por donde entró la plata. Si viene, la
   // venta genera su asiento sola: Debe [medio] / Haber Ingresos por ventas.
   cuentaMedioPagoId: idSchema.optional(),
+});
+
+/**
+ * Anular un ticket (corrección de un registro que no debió existir).
+ *
+ * El motivo es OBLIGATORIO y no acepta un carácter suelto: la venta anulada
+ * queda en la tabla para siempre y el motivo es lo único que explica por qué
+ * la cifra de ese mes bajó. Un "x" no explica nada, y la landing /socios
+ * promete que un tercero pueda revisar los cortes.
+ */
+export const saleAnularSchema = z.object({
+  motivo: z
+    .string()
+    .trim()
+    .min(6, "Escribí por qué se anula (ej. 'monto mal tecleado', 'ticket duplicado')")
+    .max(300, "El motivo es demasiado largo"),
+});
+
+// Formulario de /socios (landing pública B2B, docs/COPY_SOCIOS.md §07).
+// `whatsapp` es obligatorio (es el canal de respuesta prometido en el copy);
+// `correo` es opcional, al revés de los otros formularios de la app.
+export const socioLeadCreateSchema = z.object({
+  nombre: z.string().trim().min(1, "Nos falta este dato para poder responderle").max(120),
+  negocio: z.string().trim().min(1, "Nos falta este dato para poder responderle").max(120),
+  tipo: z.enum(["boutique", "hotel_resort", "surf_shop", "optica", "souvenirs", "otro"], {
+    message: "Nos falta este dato para poder responderle",
+  }),
+  canton: z.string().trim().min(1, "Nos falta este dato para poder responderle").max(80),
+  // "Revise el número: ocho dígitos, sin espacios." (docs/COPY_SOCIOS.md §08).
+  // Costa Rica: 8 dígitos, se acepta con espacios/guiones y se normalizan.
+  whatsapp: z
+    .string()
+    .trim()
+    .transform((v) => v.replace(/[\s-]/g, ""))
+    .refine((v) => /^\d{8}$/.test(v), "Revise el número: ocho dígitos, sin espacios."),
+  correo: z
+    .string()
+    .trim()
+    .max(160)
+    .refine((v) => v === "" || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v), "Ingresá un correo válido")
+    .optional()
+    .or(z.literal("")),
+  mensaje: z.string().trim().max(1000).optional().or(z.literal("")),
+  // Ley 8968 (PRODHAB) — no se acepta el formulario sin el consentimiento
+  // explícito, validado server-side (no basta con el checkbox del cliente).
+  aceptaPrivacidad: z.literal(true, {
+    message: "Debe aceptar el tratamiento de datos para continuar.",
+  }),
+  // Honeypot: un campo que ningún humano llena. Se valida por separado en el
+  // handler (no acá) para poder responder éxito falso sin revelar la trampa.
+  website: z.string().max(200).optional().or(z.literal("")),
 });
 
 export const periodQuerySchema = z.object({

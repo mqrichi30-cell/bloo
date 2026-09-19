@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { idSchema } from "@/lib/validation";
+import { comisionBpsSchema, idSchema } from "@/lib/validation";
 import { prisma } from "@/lib/prisma";
 import { requireValidSession } from "@/lib/session";
 import { verifyCsrf } from "@/lib/csrf";
@@ -32,6 +32,9 @@ const createSchema = z.object({
   tipo: z.enum(TIPOS),
   naturaleza: z.enum(["deudora", "acreedora"]).optional(),
   esMedioPago: z.boolean().optional(),
+  // Comisión retenida por este medio de pago, en puntos básicos. Solo tiene
+  // sentido con esMedioPago=true; en cualquier otra cuenta se ignora.
+  comisionBps: comisionBpsSchema.optional(),
   // Cuenta madre para subcuentas jerárquicas (profundidad máxima 1). Una
   // hija HEREDA tipo/naturaleza de la madre — ver más abajo, se ignora lo
   // que venga en `tipo`/`naturaleza` cuando hay parentId.
@@ -47,6 +50,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "Datos inválidos" }, { status: 400 });
   }
   const { codigo, nombre, esMedioPago } = parsed.data;
+  // Una cuenta que no es medio de pago no puede retener comisión: guardarla
+  // ahí sería un número muerto que nadie va a volver a mirar.
+  const comisionBps = esMedioPago ? parsed.data.comisionBps ?? 0 : 0;
 
   const dup = await prisma.cuenta.findUnique({ where: { codigo } });
   if (dup) return NextResponse.json({ error: "Ya existe una cuenta con ese código." }, { status: 409 });
@@ -74,7 +80,7 @@ export async function POST(request: Request) {
   let cuenta;
   try {
     cuenta = await prisma.cuenta.create({
-      data: { codigo, nombre, tipo, naturaleza, esMedioPago: esMedioPago ?? false, parentId },
+      data: { codigo, nombre, tipo, naturaleza, esMedioPago: esMedioPago ?? false, comisionBps, parentId },
     });
   } catch (err) {
     // Backstop del trigger de Postgres (ver migración 20260815010000) por si
@@ -88,7 +94,7 @@ export async function POST(request: Request) {
     accion: "cuenta.create",
     entidad: "Cuenta",
     entidadId: cuenta.id,
-    detalle: { codigo, nombre, tipo, parentId },
+    detalle: { codigo, nombre, tipo, parentId, comisionBps },
   });
   return NextResponse.json({ cuenta }, { status: 201 });
 }

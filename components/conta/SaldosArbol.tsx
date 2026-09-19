@@ -1,8 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, Percent } from "lucide-react";
 import { formatCRC } from "@/lib/money";
+import { bpsAPorcentaje, formatComision, porcentajeABps } from "@/lib/comision";
+import { apiFetch, ApiError } from "@/lib/api-client";
+import { useToast } from "@/components/ToastProvider";
 
 export interface CuentaArbol {
   id: string;
@@ -10,10 +13,98 @@ export interface CuentaArbol {
   nombre: string;
   tipo: string;
   esMedioPago: boolean;
+  comisionBps: number;
   parentId: string | null;
   tieneHijas: boolean;
   saldoCent: number;
   saldoConsolidadoCent: number;
+}
+
+/**
+ * Editor de la comisión de un medio de pago. Vive acá y no en un sheet aparte
+ * porque es un solo número y el contexto (qué cuenta, cuánto saldo tiene) es
+ * justo el que ya está en pantalla.
+ *
+ * Se teclea en porcentaje y se guarda en puntos básicos (ver lib/comision.ts).
+ * Solo afecta ventas FUTURAS: los tickets ya registrados son append-only.
+ */
+function ComisionEditor({
+  cuenta,
+  onSaved,
+}: {
+  cuenta: CuentaArbol;
+  onSaved: () => void;
+}) {
+  const { showToast } = useToast();
+  const [editando, setEditando] = useState(false);
+  const [pct, setPct] = useState(String(bpsAPorcentaje(cuenta.comisionBps) || ""));
+  const [saving, setSaving] = useState(false);
+
+  async function guardar() {
+    setSaving(true);
+    try {
+      await apiFetch(`/api/admin/cuentas/${cuenta.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ comisionBps: porcentajeABps(Number(pct) || 0) }),
+      });
+      showToast("Comisión actualizada. Aplica a las ventas de acá en adelante.", "success");
+      setEditando(false);
+      onSaved();
+    } catch (err) {
+      showToast(err instanceof ApiError ? err.message : "No se pudo guardar", "error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (!editando) {
+    return (
+      <button
+        type="button"
+        onClick={() => setEditando(true)}
+        className="mt-0.5 flex items-center gap-1 text-caption text-ink-600 underline underline-offset-2"
+      >
+        <Percent size={11} aria-hidden="true" />
+        {formatComision(cuenta.comisionBps)}
+      </button>
+    );
+  }
+
+  return (
+    <div className="mt-1 flex items-center gap-1.5">
+      <input
+        type="number"
+        step="0.01"
+        min="0"
+        max="20"
+        inputMode="decimal"
+        autoFocus
+        value={pct}
+        onChange={(e) => setPct(e.target.value)}
+        aria-label={`Comisión de ${cuenta.nombre} en porcentaje`}
+        className="min-h-9 w-20 rounded-sm border border-line-200 bg-white px-2 text-caption text-ink-900 outline-none"
+      />
+      <span className="text-caption text-ink-600">%</span>
+      <button
+        type="button"
+        onClick={guardar}
+        disabled={saving}
+        className="min-h-9 rounded-sm bg-navy-900 px-2.5 text-caption font-medium text-white disabled:opacity-50"
+      >
+        {saving ? "…" : "Guardar"}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setPct(String(bpsAPorcentaje(cuenta.comisionBps) || ""));
+          setEditando(false);
+        }}
+        className="min-h-9 px-1.5 text-caption text-ink-600"
+      >
+        Cancelar
+      </button>
+    </div>
+  );
 }
 
 const TIPO_LABEL: Record<string, string> = {
@@ -32,7 +123,14 @@ const TIPO_ORDER = ["activo", "pasivo", "patrimonio", "ingreso", "gasto"];
  * Ver requerimiento original: "quiero poder ver la sumatoria de la cuenta de
  * Sara en total o desmenuzada".
  */
-export function SaldosArbol({ cuentas }: { cuentas: CuentaArbol[] }) {
+export function SaldosArbol({
+  cuentas,
+  onCuentaActualizada,
+}: {
+  cuentas: CuentaArbol[];
+  /** Recargar saldos después de editar la comisión de un medio de pago. */
+  onCuentaActualizada: () => void;
+}) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const raices = cuentas.filter((c) => !c.parentId);
@@ -90,6 +188,7 @@ export function SaldosArbol({ cuentas }: { cuentas: CuentaArbol[] }) {
                           {c.codigo}
                           {c.esMedioPago ? " · medio de pago" : ""}
                         </p>
+                        {c.esMedioPago && <ComisionEditor cuenta={c} onSaved={onCuentaActualizada} />}
                       </div>
                       <span className="shrink-0 tabular-nums text-data-md text-ink-900">
                         {formatCRC(c.saldoConsolidadoCent)}
@@ -107,6 +206,7 @@ export function SaldosArbol({ cuentas }: { cuentas: CuentaArbol[] }) {
                               {h.codigo}
                               {h.esMedioPago ? " · medio de pago" : ""}
                             </p>
+                            {h.esMedioPago && <ComisionEditor cuenta={h} onSaved={onCuentaActualizada} />}
                           </div>
                           <span className="shrink-0 tabular-nums text-data-md text-ink-900">
                             {formatCRC(h.saldoCent)}

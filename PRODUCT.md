@@ -46,7 +46,10 @@ seguridad/negocio (ver Design Principles).
   payload, aunque la UI nunca los muestre.
 - **Append-only como memoria:** ventas y compras no se editan, se corrigen con
   devolución/ajuste + registro de auditoría, para que el número de hoy siga siendo el número
-  de mañana.
+  de mañana. Dos correcciones distintas, que no se mezclan: **devolución** (volvió mercadería,
+  `Return`) y **anulación** (el ticket no debió existir, `Sale.estado='anulada'` con motivo,
+  autor y fecha). La fila nunca se borra — lo garantizan un `CHECK` y un trigger
+  `BEFORE DELETE` en Postgres, no solo el código.
 - **Velocidad de mostrador:** el flujo de venta se diseña para el caso simple en 3 taps;
   todo lo demás (multi-ítem, descuentos, proveedor) es progresivo, no obligatorio.
 - **Un guiño de marca por pantalla:** costero en el lugar justo (saludo, éxito, vacío),

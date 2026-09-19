@@ -15,6 +15,7 @@ import { ExportarAsientosButton } from "@/components/conta/ExportarAsientosButto
 interface Cuenta extends CuentaLite {
   naturaleza: string;
   esMedioPago: boolean;
+  comisionBps: number;
   saldoCent: number;
   parentId: string | null;
   tieneHijas: boolean;
@@ -151,7 +152,7 @@ export function ContaView() {
               <SkeletonBlock variant="row" />
             </div>
           ) : (
-            <SaldosArbol cuentas={cuentas} />
+            <SaldosArbol cuentas={cuentas} onCuentaActualizada={loadCuentas} />
           )}
         </section>
       )}

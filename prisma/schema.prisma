@@ -7,12 +7,24 @@
 // con UN monto total tecleado por Cris (no por par). Cada modelo/cantidad
 // vendido vive en SaleItem. Ver Sale/SaleItem más abajo.
 //
-// COSTEO: pooled por LOTE, no por modelo/par. El costo vive en `Lote`
-// (inmutable, global, sin relación a un modelo específico). El costo unitario
-// que se le "cobra" a cada ítem de venta (costoUnitSnapshotCent en SaleItem)
-// es SUM(Lote.costoTotalCent) / SUM(Lote.unidades) en el momento de vender —
-// se prorratea igual sobre TODOS los ítems de un ticket, sin importar el
-// modelo. Ver lib/lote.ts.
+// COSTEO: CPPM (costo promedio ponderado móvil) POR SKU. El costo vive en
+// `Lote` (inmutable), y cada lote apunta al `Model` que recibió sus unidades
+// (`Lote.modelId`). El costo unitario que se le "cobra" a cada ítem de venta
+// (costoUnitSnapshotCent en SaleItem) es
+// SUM(Lote.costoTotalCent) / SUM(Lote.unidades) DE LOS LOTES DE ESE MODELO,
+// leído en el momento de vender. Ver lib/lote.ts.
+//
+// HISTORIA (auditoría 16-ago-2026): antes el pool era GLOBAL — promediaba
+// lentes y estuches en un solo costo unitario, y le cobraba ese promedio a
+// todos los ítems de un ticket sin importar el modelo. Con 63 lentes a
+// ₡102.635,42 y 37 estuches a ₡72.004,92, el promedio global daba ₡1.746,40/u
+// cuando el lente real costaba ₡1.629,13 y el estuche ₡1.946,08: sobrecosteaba
+// el lente y subcosteaba el estuche (cuyo margen real contra un PVP de ₡2.000
+// era 2,7%, no el 12,7% que aparentaba). NO volver a un pool global.
+// (Esas cifras son las del día de la auditoría. El CPPM se mueve con cada
+// lote: tras la orden NHCR608282322226 del 28-ago-2026 el lente quedó en
+// ₡1.690,78 y el estuche estándar en ₡1.840,02. El costo vigente se consulta
+// con lib/lote.ts#getUnitCostByModelCent, nunca copiando un número de acá.)
 
 generator client {
   provider      = "prisma-client-js"
@@ -45,7 +57,11 @@ model User {
   createdAt    DateTime @default(now())
 
   lotes               Lote[]
-  sales               Sale[]
+  sales               Sale[]               @relation("SaleVendedor")
+  // Tickets que ESTE usuario anuló (no que vendió). Relación aparte de
+  // `sales` porque quien anula casi nunca es quien vendió, y el compromiso
+  // público exige saber ambos nombres. Ver Sale.anuladaPorUserId.
+  salesAnuladas       Sale[]               @relation("SaleAnuladaPor")
   returns             Return[]
   reservas            Reserva[]
   auditLogs           AuditLog[]
@@ -159,13 +175,16 @@ model Model {
 
   saleItems SaleItem[]
   reservas  Reserva[]
+  lotes     Lote[]
 
   @@index([activo])
 }
 
-// Lote de compra de inventario. GLOBAL, no atado a un modelo específico
-// (Cris compra en bloque sin desglose por par). Inmutable — nunca se edita
-// después de creado; es el ledger financiero de costo.
+// Lote de compra de inventario, atado al MODELO/SKU que recibió sus unidades
+// (`modelId`). Inmutable — nunca se edita después de creado; es el ledger
+// financiero de costo. Si un mismo envío físico trae varios SKU, se registra
+// un Lote por SKU (así llegó la factura NHCR607272277300: una fila de lentes
+// y una de estuches).
 model Lote {
   id                   String    @id @default(uuid())
   fecha                DateTime
@@ -182,6 +201,16 @@ model Lote {
   // — este campo se llena una sola vez, al pagar, y ya no cambia después.
   tipoCambioPagoCent   Int?
 
+  // SKU que recibió estas unidades. Es lo que permite promediar el costo POR
+  // MODELO en vez de globalmente (ver nota de costeo arriba y lib/lote.ts).
+  // Nullable solo por compatibilidad con filas anteriores a la migración
+  // 20260816120000; toda alta nueva lo escribe (`app/api/admin/lotes` ya
+  // recibía `modelId` para sumar el stock, solo que no lo guardaba). Un lote
+  // sin modelo cae al pool "sin asignar", que NO contamina el costo de ningún
+  // SKU con lotes propios.
+  modelId String?
+  model   Model?  @relation(fields: [modelId], references: [id])
+
   userId String?
   user   User?   @relation(fields: [userId], references: [id])
 
@@ -189,11 +218,31 @@ model Lote {
 
   @@index([fecha])
   @@index([pagado])
+  @@index([modelId])
 }
 
-// Venta = TICKET (puede incluir varios modelos). Inmutable (append-only).
-// Corrección = Return, nunca UPDATE de esta fila. El monto lo teclea Cris a
-// nivel de ticket (no por par) — ver SaleItem para el desglose por modelo.
+// Venta = TICKET (puede incluir varios modelos). Append-only: la fila NUNCA se
+// borra. El monto lo teclea Cris a nivel de ticket (no por par) — ver SaleItem
+// para el desglose por modelo.
+//
+// DOS FORMAS DE CORREGIR, Y NO SON INTERCAMBIABLES (auditoría 16-ago-2026):
+//
+//  · `Return` — el cliente DEVOLVIÓ producto. Hubo venta, hubo entrega, hubo
+//    reingreso de mercadería y salida de plata. Deja `estado` en "devuelta" o
+//    "parcial" según cuánto volvió.
+//  · `estado = "anulada"` — el ticket NO DEBIÓ EXISTIR (dedazo, monto mal
+//    tecleado, venta duplicada). No volvió nada porque nunca salió nada.
+//
+// Anular NO es devolver, y usar `Return` para un dedazo corrompe dos cifras:
+// inventa una devolución que nunca ocurrió, y la métrica pública de /socios
+// resta `Return.cantidadDevuelta` del mes (docs/METAS_UMBRALES.md §9.1) — o
+// sea que un ticket fantasma se contaría como vendido-y-devuelto en vez de
+// como nunca vendido. Por eso es estado propio y no una fila de Return.
+//
+// HISTORIA: hasta el 16-ago-2026 `DELETE /api/sales/[id]` borraba la fila de
+// verdad. 5 ventas desaparecieron así (ver docs/AUDITORIA_VENTAS_BORRADAS.md).
+// Hoy el borrado físico está bloqueado por trigger en Postgres, no solo por
+// código — ver migrations/20260816130000_sale_anulacion.
 model Sale {
   id    String   @id @default(uuid())
   fecha DateTime @default(now())
@@ -210,14 +259,28 @@ model Sale {
   cogsCent     Int
   utilidadCent Int // baseCent - cogsCent
 
-  estado String @default("activa") // "activa" | "devuelta" | "parcial"
+  // "activa" | "anulada" | "devuelta" | "parcial".
+  // Solo "activa" cuenta para cifras (Panel y métrica pública). El único lugar
+  // donde eso se decide es lib/sale-estado.ts — no escribir el literal suelto
+  // en una consulta nueva, o dashboard y landing se van a separar.
+  estado String @default("activa")
+
+  // --- ANULACIÓN LÓGICA ---
+  // Los tres campos van juntos o no va ninguno: hay un CHECK en Postgres que
+  // impide `estado='anulada'` sin motivo, autor y fecha. Una anulación sin
+  // autor no es auditable, y el compromiso público de /socios promete que un
+  // tercero pueda revisar por qué una cifra cambió.
+  anuladaEn        DateTime?
+  anulacionMotivo  String?
+  anuladaPorUserId String?
+  anuladaPor       User?     @relation("SaleAnuladaPor", fields: [anuladaPorUserId], references: [id])
 
   clienteNombre String?
   clienteId     String?
   formaPago     String?
 
   userId String
-  user   User   @relation(fields: [userId], references: [id])
+  user   User   @relation("SaleVendedor", fields: [userId], references: [id])
 
   createdAt DateTime @default(now())
 
@@ -226,6 +289,10 @@ model Sale {
 
   @@index([userId, fecha])
   @@index([fecha])
+  // La métrica pública agrupa por mes filtrando estado: sin este índice hace
+  // seq scan sobre toda la tabla en cada corte.
+  @@index([estado, fecha])
+  @@index([anuladaPorUserId])
 }
 
 // Línea de un ticket: un modelo + cantidad dentro de una Sale. Inmutable.
@@ -251,8 +318,10 @@ model SaleItem {
   @@index([modelId])
 }
 
-// Devolución / ajuste. Nunca se borra ni edita una Sale; esto es lo único que
-// "revierte" una venta, con su propio registro y AuditLog.
+// DEVOLUCIÓN de mercadería: el cliente trajo el producto de vuelta. Es un
+// hecho económico nuevo (entra inventario, sale plata), no una corrección de
+// tecleo — para eso está `Sale.estado='anulada'`, ver la nota en Sale.
+// Sigue siendo cierto que nunca se borra ni edita una Sale.
 model Return {
   id     String   @id @default(uuid())
   saleId String
@@ -305,6 +374,35 @@ model AuditLog {
 }
 
 // ============================================================
+// LANDING PÚBLICA B2B (/socios) — captura de leads de puntos de venta
+// ============================================================
+
+// Solicitud de un negocio (tienda/boutique/hotel/surf shop/óptica) que quiere
+// vender bloo. Append-only, sin UI de administración todavía (se revisa vía
+// Prisma Studio o consulta directa — TODO: vista admin si el volumen lo pide).
+// No lleva datos de dinero: nada de convención de céntimos acá.
+model SocioLead {
+  id     String @id @default(uuid())
+  nombre String // quién llena el formulario
+  negocio String // nombre del negocio/tienda
+  // "boutique" | "hotel_resort" | "surf_shop" | "optica" | "souvenirs" | "otro"
+  // (ver docs/COPY_SOCIOS.md §07, campo `tipo`)
+  tipoNegocio String
+  canton String // dónde está el punto de venta (docs/COPY_SOCIOS.md campo `canton`)
+  whatsapp String // obligatorio en el copy — "por aquí le mandamos el catálogo"
+  correo String? // opcional en el copy (a diferencia de whatsapp)
+  mensaje String?
+
+  // IP vía lib/auth.ts#getClientIp (mismo criterio "untrusted" sin proxy
+  // confiable configurado) — solo fines forenses/anti-spam, no de negocio.
+  ip String
+
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+// ============================================================
 // MÓDULO CONTABLE (partida doble)
 // ============================================================
 
@@ -318,6 +416,22 @@ model Cuenta {
   // true = es un medio de pago (Caja, SINPE Cris/Sara, Datáfono) -> aparece en
   // el selector de medio de pago de las plantillas.
   esMedioPago Boolean @default(false)
+
+  // Comisión que el procesador RETIENE sobre lo cobrado por este medio de
+  // pago, en PUNTOS BÁSICOS (1 bps = 0,01 %; 350 bps = 3,50 %). Entero, misma
+  // regla que el dinero: nunca Float.
+  //
+  // Default 0 A PROPÓSITO — mientras nadie confirme la tarifa real con el
+  // adquirente, el sistema NO inventa un porcentaje: no genera asiento de
+  // comisión y la cuenta 5-2-002 queda en cero, que es honesto. Cuando Cris
+  // confirme la tarifa la escribe en /conta → Cuentas y a partir de ahí cada
+  // venta con ese medio asienta la comisión sola (ver app/api/sales/route.ts).
+  //
+  // Debe ser la tasa TOTAL retenida: si el adquirente cobra IVA sobre su
+  // comisión, va incluido acá. La app no desglosa el IVA de la comisión —
+  // `AppConfig.ivaActivo=false`, bloo no acredita IVA todavía.
+  comisionBps Int @default(0)
+
   activo      Boolean @default(true)
   createdAt   DateTime @default(now())
 
@@ -349,8 +463,13 @@ model Asiento {
   id        String   @id @default(uuid())
   fecha     DateTime
   glosa     String
-  origen    String   @default("manual") // "manual" | "pago_lote" | "cobro_reserva"
-  refId     String? // id del Lote/Reserva si viene de una plantilla
+  // "manual" | "pago_lote" | "cobro_reserva" | "venta" | "venta_anulada"
+  // | "venta_borrada" (HISTÓRICO: contra-asientos de las ventas que se
+  //   borraron físicamente antes del 16-ago-2026. No se genera más; sus
+  //   `refId` apuntan a filas que ya no existen —
+  //   ver docs/AUDITORIA_VENTAS_BORRADAS.md).
+  origen    String   @default("manual")
+  refId     String? // id del Lote/Reserva/Sale si viene de una plantilla
   userId    String
   user      User     @relation(fields: [userId], references: [id])
   createdAt DateTime @default(now())

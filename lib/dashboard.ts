@@ -1,7 +1,8 @@
 import { prisma } from "./prisma";
 import { roundCents } from "./money";
-import { costoLoteEnColonesCent } from "./lote";
+import { costoLoteEnColonesCent, getCostosUnitariosPorSku } from "./lote";
 import { LOW_STOCK_THRESHOLD } from "./dashboard-constants";
+import { whereItemDeVentaEnRango, whereVentaEnRango } from "./sale-estado-query";
 
 export { LOW_STOCK_THRESHOLD };
 
@@ -38,9 +39,11 @@ interface SaleForCalc {
 
 export async function loadSalesInRange(range: PeriodRange): Promise<SaleForCalc[]> {
   return prisma.sale.findMany({
-    // Solo tickets activos: el IVA es pass-through y la utilidad/ingreso de un
-    // ticket devuelto no debería seguir contando (§11 spec fiscal).
-    where: { fecha: { gte: range.start, lt: range.end }, estado: "activa" },
+    // Solo tickets que cuentan: el IVA es pass-through y la utilidad/ingreso
+    // de un ticket devuelto o anulado no debería seguir contando (§11 spec
+    // fiscal). El criterio lo define lib/sale-estado.ts, compartido con la
+    // métrica pública de /socios — no reescribirlo acá.
+    where: whereVentaEnRango(range.start, range.end),
     select: {
       fecha: true,
       baseCent: true,
@@ -53,12 +56,14 @@ export async function loadSalesInRange(range: PeriodRange): Promise<SaleForCalc[
 interface SaleItemForCalc {
   modelId: string;
   cantidad: number;
+  /** COGS de la línea al costo POR SKU vigente al vender (SaleItem, inmutable). */
+  cogsLineCent: number;
 }
 
 export async function loadSaleItemsInRange(range: PeriodRange): Promise<SaleItemForCalc[]> {
   return prisma.saleItem.findMany({
-    where: { sale: { fecha: { gte: range.start, lt: range.end }, estado: "activa" } },
-    select: { modelId: true, cantidad: true },
+    where: whereItemDeVentaEnRango(range.start, range.end),
+    select: { modelId: true, cantidad: true, cogsLineCent: true },
   });
 }
 
@@ -101,6 +106,23 @@ export function summarizeVentas(sales: SaleForCalc[]) {
  */
 export function summarizeGastos(lotes: LoteForCalc[], tipoCambioActualUsdCent: number): number {
   return lotes.reduce((sum, l) => sum + costoLoteEnColonesCent(l, tipoCambioActualUsdCent), 0);
+}
+
+/**
+ * COGS del período al costo POR SKU: suma de `SaleItem.cogsLineCent`, que es
+ * el snapshot inmutable del CPPM del modelo al momento de vender.
+ *
+ * OJO con la diferencia entre esto y `summarizeGastos`, que NO son lo mismo ni
+ * deberían cuadrar:
+ *  · `gastosCent` = lotes COMPRADOS en el período (criterio de caja del dueño,
+ *    es el que manda en el KPI "Utilidad" del Panel).
+ *  · `cogsCent`   = costo de lo VENDIDO en el período. Sirve para el margen
+ *    bruto por unidad vendida, que es la cifra que un mes de mucha compra
+ *    distorsiona en el KPI de utilidad.
+ * Ver el disclaimer de app/api/admin/dashboard/route.ts.
+ */
+export function summarizeCogs(saleItems: SaleItemForCalc[]): number {
+  return saleItems.reduce((sum, i) => sum + i.cogsLineCent, 0);
 }
 
 export function buildBarBuckets(
@@ -175,6 +197,35 @@ export async function buildRankingByModel(saleItems: SaleItemForCalc[], take = 5
     fotoUrl: modelById.get(modelId)?.fotoUrl ?? null,
     cantidad,
   }));
+}
+
+/**
+ * Costo unitario vigente POR SKU, con el nombre del modelo, para mostrarlo en
+ * Panel e Inventario. Es lo que reemplazó al "costo unitario pooled" único que
+ * se enseñaba antes: ese número era el promedio de lentes y estuches juntos y
+ * no describía a ninguno de los dos.
+ *
+ * El pool "sin asignar" (lotes sin `modelId`) sale con nombre propio a
+ * propósito: si aparece, es una compra que nadie atribuyó a un SKU y hay que
+ * arreglarla, no esconderla.
+ */
+export async function getCostoUnitarioPorSku() {
+  const costos = await getCostosUnitariosPorSku(prisma);
+  const modelIds = costos.map((c) => c.modelId).filter((id): id is string => id !== null);
+  const models = await prisma.model.findMany({
+    where: { id: { in: modelIds } },
+    select: { id: true, nombre: true },
+  });
+  const nombreById = new Map(models.map((m) => [m.id, m.nombre]));
+  return costos
+    .map((c) => ({
+      modelId: c.modelId,
+      nombre: c.modelId ? nombreById.get(c.modelId) ?? "(modelo eliminado)" : "Sin asignar a un modelo",
+      costoUnitCent: c.costoUnitCent,
+      unidadesCompradas: c.unidades,
+      costoTotalCent: c.costoTotalCent,
+    }))
+    .sort((a, b) => b.unidadesCompradas - a.unidadesCompradas);
 }
 
 export async function getLowStockModels() {

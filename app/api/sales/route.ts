@@ -5,11 +5,12 @@ import { requireValidSession } from "@/lib/session";
 import { verifyCsrf } from "@/lib/csrf";
 import { saleCreateSchema } from "@/lib/validation";
 import { deriveIvaConfigurable } from "@/lib/money";
-import { getPooledUnitCostCent } from "@/lib/lote";
+import { getUnitCostByModelCent } from "@/lib/lote";
 import { getAppConfig } from "@/lib/config";
 import { saleSelectFor } from "@/lib/roles";
 import { writeAudit } from "@/lib/audit";
-import { CUENTA_INGRESOS, CUENTA_IVA } from "@/lib/conta";
+import { CUENTA_COMISION_DATAFONO, CUENTA_INGRESOS, CUENTA_IVA } from "@/lib/conta";
+import { comisionMedioPagoCent } from "@/lib/comision";
 
 export async function GET(request: Request) {
   const session = await requireValidSession();
@@ -106,9 +107,10 @@ export async function POST(request: Request) {
         precioIncluyeIva
       );
 
-      // Costo POOLED: UNA sola lectura para todo el ticket — se prorratea
-      // igual a cada ítem, sin importar el modelo (snapshot dentro de la tx).
-      const costoUnitSnapshotCent = await getPooledUnitCostCent(tx);
+      // Costo POR SKU: cada ítem se cobra al CPPM de SU modelo, no a un
+      // promedio global del ticket (ver lib/lote.ts#getUnitCostByModelCent).
+      // Una sola lectura para todos los modelos del ticket, dentro de la tx.
+      const costoPorModelo = await getUnitCostByModelCent(tx, Array.from(mergedItems.keys()));
 
       let cogsCent = 0;
       const itemsData: {
@@ -137,6 +139,7 @@ export async function POST(request: Request) {
           data: { stockQty: { decrement: cantidad } },
         });
 
+        const costoUnitSnapshotCent = costoPorModelo.get(modelId) ?? 0;
         const cogsLineCent = cantidad * costoUnitSnapshotCent;
         cogsCent += cogsLineCent;
         itemsData.push({ modelId, cantidad, costoUnitSnapshotCent, cogsLineCent });
@@ -171,9 +174,24 @@ export async function POST(request: Request) {
       });
 
       // ASIENTO AUTOMÁTICO de la venta (partida doble):
-      //   Debe  [medio de pago]      = lo efectivamente cobrado
+      //   Debe  [medio de pago]      = cobrado − comisión (lo que de verdad
+      //                                queda en esa cuenta)
+      //   Debe  Comisión datáfono    = comisión retenida (solo si el medio de
+      //                                pago tiene tarifa configurada)
       //   Haber Ingresos por ventas  = base
       //   Haber IVA por pagar        = IVA (solo si ivaActivo; hoy es 0)
+      //
+      // La COMISIÓN es la corrección de la auditoría del 16-ago-2026: entraron
+      // ₡59.000 por datáfono y la cuenta 5-2-002 seguía en cero, así que ese
+      // costo no aparecía en ninguna cifra de utilidad. Se netea contra el
+      // medio de pago (no se asienta aparte) porque el saldo de esa cuenta es
+      // lo que el Panel muestra como "en manos de quién": si acredita el bruto,
+      // dice que Sara tiene plata que el adquirente ya se quedó.
+      //
+      // La TASA sale de `Cuenta.comisionBps` del medio de pago, nunca de una
+      // constante: con 0 (default) no se genera línea de comisión. Ver
+      // lib/conta.ts#comisionMedioPagoCent.
+      //
       // No se asienta COGS: la decisión de Cris es registrar el gasto al
       // COMPRAR el lote, no al vender (ver MASTER_SPEC / plantilla "Pagar
       // mercadería"). Si falta el plan de cuentas, la venta NO se cae — se
@@ -185,6 +203,18 @@ export async function POST(request: Request) {
         if (ivaCent > 0 && !cuentaIva) throw new SaleError(`Falta la cuenta '${CUENTA_IVA}' (IVA por pagar).`, 400);
 
         const cobradoCent = baseCent + ivaCent;
+        const comisionCent = comisionMedioPagoCent(cobradoCent, medio.comisionBps);
+        const cuentaComision =
+          comisionCent > 0
+            ? await tx.cuenta.findUnique({ where: { codigo: CUENTA_COMISION_DATAFONO } })
+            : null;
+        if (comisionCent > 0 && !cuentaComision) {
+          throw new SaleError(
+            `"${medio.nombre}" tiene una comisión configurada pero falta la cuenta '${CUENTA_COMISION_DATAFONO}' (Comisión datáfono). Creala en /conta → Cuentas.`,
+            400
+          );
+        }
+
         await tx.asiento.create({
           data: {
             fecha: new Date(),
@@ -194,7 +224,8 @@ export async function POST(request: Request) {
             userId: session.userId!,
             lineas: {
               create: [
-                { cuentaId: medio.id, debeCent: cobradoCent, haberCent: 0 },
+                { cuentaId: medio.id, debeCent: cobradoCent - comisionCent, haberCent: 0 },
+                ...(cuentaComision ? [{ cuentaId: cuentaComision.id, debeCent: comisionCent, haberCent: 0 }] : []),
                 { cuentaId: ingresos.id, debeCent: 0, haberCent: baseCent },
                 ...(cuentaIva ? [{ cuentaId: cuentaIva.id, debeCent: 0, haberCent: ivaCent }] : []),
               ],

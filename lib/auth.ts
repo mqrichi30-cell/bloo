@@ -124,3 +124,34 @@ export function getClientIp(headers: Headers): string {
 
   return candidate;
 }
+
+/**
+ * IP del visitante para rate-limit de endpoints PÚBLICOS y sin login
+ * (`/api/socios/*`) — NUNCA usar para decisiones de seguridad de auth, eso
+ * sigue siendo `getClientIp` con su guardia `TRUST_PROXY_HEADERS`.
+ *
+ * Por qué esta es distinta: sin `TRUST_PROXY_HEADERS=true` configurado,
+ * `getClientIp` devuelve "untrusted" para todo el mundo, así que un
+ * rate-limit por IP como `checkRateLimit(`clave:${ip}`)` termina siendo un
+ * balde GLOBAL — una ráfaga de tráfico (legítimo o no) bloquea a cualquier
+ * otro visitante, incluidos puntos de venta reales llenando el formulario
+ * (auditoría de seguridad 2026-08-16). El costo de equivocarse acá es bajo
+ * (peor caso: alguien rota IPs falsas y se salta el límite de un endpoint
+ * de solo lectura ya cacheado, o de un formulario que igual valida
+ * server-side) — muy distinto del costo de equivocarse en el lockout de
+ * login, por eso esta función no comparte el guardia conservador de esa.
+ *
+ * Netlify inyecta `x-nf-client-connection-ip` en el edge con la IP real de
+ * conexión — el cliente no puede falsificarlo (a diferencia de
+ * X-Forwarded-For, que si no hay proxy de confianza en el medio, lo pone
+ * quien hace la petición). Se usa esa primero; X-Forwarded-For queda de
+ * respaldo para `next dev` y otros hosts.
+ */
+export function getPublicRateLimitIp(headers: Headers): string {
+  const nfIp = headers.get("x-nf-client-connection-ip");
+  if (nfIp && nfIp.trim()) return nfIp.trim();
+
+  const forwarded = headers.get("x-forwarded-for");
+  const candidate = forwarded ? forwarded.split(",")[0].trim() : headers.get("x-real-ip");
+  return candidate && candidate.trim() ? candidate.trim() : "unknown";
+}

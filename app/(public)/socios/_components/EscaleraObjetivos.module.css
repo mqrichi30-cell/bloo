@@ -1,0 +1,364 @@
+/*
+ * EscaleraObjetivos — una escalera dibujada, no tarjetas a distintas alturas.
+ *
+ * Estructura: N peldaños ascendentes (sin piso — un nivel ya cumplido hoy no
+ * es un peldaño, decisión del dueño). Un solo perfil SVG continuo (suelo ->
+ * contrahuella -> huella -> contrahuella -> huella...) se dibuja al entrar en
+ * viewport (stroke-dashoffset, técnica ya usada en este proyecto para
+ * wave-draw / check-draw). Hay una franja de piso (.floor) puramente de
+ * escenografía bajo el primer peldaño, sin datos ni contenido: la escalera
+ * necesita apoyarse en algo, no es un cuarto peldaño.
+ *
+ * Un peldaño en progreso = bloque sólido; un peldaño futuro = bloque
+ * hueco/punteado (plano, no construido). Debajo, la información real vive
+ * sin caja: sin fondo, sin borde, sin sombra — tipografía apoyada sobre una
+ * escala de columnas que espeja las proporciones del dibujo de arriba.
+ *
+ * .stage tiene tamaño propio (aspect-ratio + min/max-height): nunca depende
+ * de que el texto de abajo lo empuje, y nunca colapsa a 0 si los datos
+ * vienen incompletos (el propio componente ya se defiende de eso).
+ *
+ * Autocontenido en un panel hueso/crema (no depende del fondo de la sección
+ * que lo envuelve). Todo el texto vive en el DOM siempre, sin hover.
+ * Longitudes de nombre/promesa/plazo/comprobación son variables (el copy de
+ * los tres peldaños se está reescribiendo); nada aquí asume un largo fijo.
+ */
+
+.panel {
+  width: 100%;
+  max-width: 1180px;
+  margin-inline: auto;
+  background: #f6f3ea;
+  border-radius: 4px;
+  padding: clamp(2.5rem, 4vw + 1rem, 4.5rem) clamp(1.5rem, 4vw, 3.5rem) clamp(3rem, 5vw, 5rem);
+}
+
+/* ---------------------------------------------------------------------- *
+ * the staircase illustration
+ * ---------------------------------------------------------------------- */
+
+.stage {
+  width: 100%;
+  aspect-ratio: 900 / 340;
+  /* floor, not ceiling, at narrow widths: three risers read as a strip
+     otherwise. min-height wins over the aspect-ratio-derived height when
+     it's larger, so this is a real guarantee, not a hint. Capped at 260px
+     so its own upper bound can never conflict with max-height below
+     (min-height wins ties in CSS, so if this clamp topped out above 300px
+     it would silently defeat the max-height ceiling on wide viewports). */
+  min-height: clamp(150px, 34vw, 260px);
+  /* ceiling at wide widths: this is the second animation on the page, it
+     shouldn't out-scale MetaPrincipal just because the viewport is wide.
+     preserveAspectRatio="none" on the svg means it stretches to whatever
+     box this ends up being, by design. */
+  max-height: 300px;
+  margin-bottom: clamp(1.75rem, 3vw, 2.75rem);
+}
+
+.stageSvg {
+  width: 100%;
+  height: 100%;
+  display: block;
+  overflow: visible;
+}
+
+/* pure staging: the ground the staircase sits on. Static, not data-bound,
+   always drawn — this alone gives .stage real visual content immediately,
+   independent of scroll state or any zone data. */
+.floor {
+  fill: rgba(11, 14, 48, 0.16);
+}
+
+.stepBlock {
+  opacity: 0;
+  transform: scaleY(0.55);
+  transform-origin: bottom;
+  transition: opacity 0.55s cubic-bezier(0.16, 1, 0.3, 1) var(--zone-delay, 0s),
+    transform 0.55s cubic-bezier(0.16, 1, 0.3, 1) var(--zone-delay, 0s);
+}
+
+.inView .stepBlock {
+  opacity: 1;
+  transform: scaleY(1);
+}
+
+/* en-progreso: built, solid material */
+.stepBlock[data-estado="en-progreso"] {
+  fill: rgba(11, 14, 48, 0.14);
+  stroke: #9c8046;
+  stroke-width: 1.5;
+}
+
+/* futuro: not built yet, a hollow / blueprint outline */
+.stepBlock[data-estado="futuro"] {
+  fill: none;
+  stroke: rgba(11, 14, 48, 0.5);
+  stroke-width: 1.5;
+  stroke-dasharray: 6 6;
+}
+
+.climbLine {
+  stroke: #9c8046;
+  stroke-width: 3.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 100;
+  stroke-dashoffset: 100;
+  transition: stroke-dashoffset var(--line-duration, 1.5s) cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.inView .climbLine {
+  stroke-dashoffset: 0;
+}
+
+.marker3,
+.marker2 {
+  fill: #9c8046;
+  filter: drop-shadow(0 0 6px rgba(156, 128, 70, 0.55));
+  opacity: 0;
+  transform: translate(var(--p0x), var(--p0y));
+}
+
+@keyframes climb-3 {
+  0% {
+    opacity: 1;
+    transform: translate(var(--p0x), var(--p0y));
+  }
+  50% {
+    transform: translate(var(--p1x), var(--p1y));
+  }
+  100% {
+    opacity: 1;
+    transform: translate(var(--p2x), var(--p2y));
+  }
+}
+
+@keyframes climb-2 {
+  0% {
+    opacity: 1;
+    transform: translate(var(--p0x), var(--p0y));
+  }
+  100% {
+    opacity: 1;
+    transform: translate(var(--p2x), var(--p2y));
+  }
+}
+
+.inView .marker3 {
+  opacity: 1;
+  animation: climb-3 var(--line-duration, 1.5s) cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.inView .marker2 {
+  opacity: 1;
+  animation: climb-2 var(--line-duration, 1.5s) cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* ---------------------------------------------------------------------- *
+ * the facts: unboxed, mirrors the illustration's column proportions
+ * ---------------------------------------------------------------------- */
+
+.info {
+  display: grid;
+  gap: clamp(1.75rem, 3vw, 2.5rem);
+}
+
+@media (max-width: 760px) {
+  .info {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+.infoGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  opacity: 0;
+  transform: translateY(10px);
+  transition: opacity 0.5s cubic-bezier(0.16, 1, 0.3, 1) calc(var(--zone-delay, 0s) + 0.05s),
+    transform 0.5s cubic-bezier(0.16, 1, 0.3, 1) calc(var(--zone-delay, 0s) + 0.05s);
+}
+
+.inView .infoGroup {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.groupLabel {
+  margin: 0;
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: rgba(11, 14, 48, 0.68);
+}
+
+.groupMeta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.estadoBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: rgba(11, 14, 48, 0.68);
+}
+
+.estadoDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.estadoDot[data-estado="en-progreso"] {
+  background: #9c8046;
+  box-shadow: 0 0 6px rgba(156, 128, 70, 0.5);
+}
+
+.estadoDot[data-estado="futuro"] {
+  background: transparent;
+  border: 1.5px solid rgba(11, 14, 48, 0.5);
+}
+
+.umbralLabel {
+  margin: 0;
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: rgba(11, 14, 48, 0.68);
+}
+
+.umbralValue {
+  margin: 0;
+  font-family: var(--font-om-serif), "Iowan Old Style", "Sitka Text", Georgia, "Times New Roman",
+    serif;
+  line-height: 1.1;
+  color: #0b0e30;
+}
+
+.umbralValue[data-estado="en-progreso"][data-variant="number"] {
+  color: #9c8046;
+}
+
+.umbralValue[data-variant="number"] {
+  font-size: clamp(2rem, 1.4vw + 1.6rem, 2.5rem);
+}
+
+.umbralValue[data-variant="token"] {
+  font-family: "SFMono-Regular", "Consolas", "Liberation Mono", monospace;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  opacity: 0.85;
+}
+
+.umbralValue[data-variant="pending"] {
+  font-family: inherit;
+  font-size: 1.0625rem;
+  font-style: italic;
+  font-weight: 500;
+}
+
+.umbralValue[data-variant="pending"] span {
+  padding-block: 0.15rem;
+  border-bottom: 1px dashed currentColor;
+  opacity: 0.85;
+}
+
+.groupNombre {
+  margin: 0;
+  font-size: clamp(1.0625rem, 0.3vw + 1rem, 1.1875rem);
+  font-weight: 600;
+  color: #0b0e30;
+}
+
+.groupPromesa {
+  margin: 0;
+  font-weight: 500;
+  font-size: 1rem;
+  line-height: 1.6;
+  max-width: 34ch;
+  color: #0b0e30;
+  /* Peldaño 2 y 3 traen un segundo párrafo ("Por qué a las 300/500") unido
+     con \n\n en el dato — no hay campo aparte en la firma del componente
+     (siete campos, sin octavo por conveniencia). pre-line respeta esos
+     saltos como párrafos reales sin convertir el CSS en HTML. */
+  white-space: pre-line;
+}
+
+.groupRule {
+  width: 100%;
+  height: 1px;
+  border: none;
+  margin: 0.15rem 0 0;
+  background: rgba(11, 14, 48, 0.14);
+}
+
+.groupFooter {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.footerItem {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.footLabel {
+  margin: 0;
+  flex-shrink: 0;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: rgba(11, 14, 48, 0.68);
+}
+
+.footValue {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  color: rgba(11, 14, 48, 0.85);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stepBlock,
+  .climbLine,
+  .marker3,
+  .marker2,
+  .infoGroup {
+    transition: none !important;
+    animation: none !important;
+  }
+
+  .stepBlock {
+    opacity: 1;
+    transform: none;
+  }
+
+  .climbLine {
+    stroke-dashoffset: 0;
+  }
+
+  .marker3,
+  .marker2 {
+    opacity: 1;
+    transform: translate(var(--p2x), var(--p2y));
+  }
+
+  .infoGroup {
+    opacity: 1;
+    transform: none;
+  }
+}
