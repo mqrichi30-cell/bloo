@@ -20,6 +20,10 @@ const PUBLIC_API_PATHS = [
   "/api/auth/login",
   "/api/auth/logout",
   "/api/keepalive",
+  // Cron del tipo de cambio: lo llama netlify/functions/tipo-cambio.mjs, que
+  // no tiene sesión. No expone datos de negocio y su propia ruta exige
+  // `x-cron-secret` si existe CRON_SECRET (ver app/api/cron/tipo-cambio).
+  "/api/cron/tipo-cambio",
   "/api/socios",
   "/api/socios/avance",
 ];

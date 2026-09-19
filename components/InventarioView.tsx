@@ -79,7 +79,7 @@ export function InventarioView() {
           <p className="pt-2 text-caption text-ink-600">
             Promedio ponderado de los lotes de cada producto — ya no un promedio único de todo lo
             comprado. Tipo de cambio ₡{(configData.config.tipoCambioUsdCent / 100).toFixed(2)}/USD ·{" "}
-            {configData.config.tipoCambioFuente === "manual" ? "manual" : "BAC (BCCR)"} — editable en Perfil.
+            {configData.config.tipoCambioFuente} — editable en Perfil.
           </p>
         </div>
       )}

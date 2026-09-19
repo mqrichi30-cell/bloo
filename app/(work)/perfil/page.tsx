@@ -33,8 +33,12 @@ function formatActualizado(iso: string | null): string {
   });
 }
 
+// La fuente automatica se guarda como texto en AppConfig.tipoCambioFuente
+// (lib/tipo-cambio-bac.ts FUENTE_AUTOMATICA). Se muestra tal cual: hasta el
+// 2026-09-19 aca habia un "BAC (BCCR)" hardcodeado que siguio mintiendo un mes
+// despues de que el BCCR borrara esa pagina. Nunca mas rotular la fuente a mano.
 function fuenteLabel(fuente: string): string {
-  return fuente === "manual" ? "manual" : "BAC (BCCR)";
+  return fuente || "desconocida";
 }
 
 function AjustesSettings() {
@@ -84,9 +88,14 @@ function AjustesSettings() {
       });
       setData((prev) => (prev ? { ...prev, config: res.config } : prev));
       setRateText((res.config.tipoCambioUsdCent / 100).toFixed(2));
-      showToast(`Actualizado desde BAC: ₡${(res.config.tipoCambioUsdCent / 100).toFixed(2)}/USD.`, "success");
+      showToast(
+        `Actualizado (${fuenteLabel(res.config.tipoCambioFuente)}): ₡${(
+          res.config.tipoCambioUsdCent / 100
+        ).toFixed(2)}/USD.`,
+        "success"
+      );
     } catch (err) {
-      showToast(err instanceof ApiError ? err.message : "No se pudo consultar BAC/BCCR", "error");
+      showToast(err instanceof ApiError ? err.message : "No se pudo consultar el tipo de cambio", "error");
     } finally {
       setRefreshing(false);
     }
@@ -190,8 +199,9 @@ function AjustesSettings() {
           </SecondaryButton>
         </div>
         <p className="text-caption text-ink-600">
-          &ldquo;Actualizar ahora&rdquo; consulta BAC/BCCR en vivo y vuelve a modo automático (deja
-          de estar en manual).
+          &ldquo;Actualizar ahora&rdquo; consulta la fuente mid-market en vivo y vuelve a modo
+          automático (deja de estar en manual). No es el tipo de venta de ventanilla de un
+          banco: corre ~1-2% por debajo.
         </p>
       </div>
 

@@ -7,7 +7,7 @@ import { verifyCsrf } from "@/lib/csrf";
 import { writeAudit } from "@/lib/audit";
 import { getAppConfig } from "@/lib/config";
 import { costoLoteEnColonesCent } from "@/lib/lote";
-import { CUENTA_CXP, CUENTA_DIFERENCIAL_CAMBIARIO } from "@/lib/conta";
+import { CUENTA_CXP, CUENTA_DIFERENCIAL_CAMBIARIO, resolveCuentaCxpDelLote } from "@/lib/conta";
 
 export const dynamic = "force-dynamic";
 
@@ -31,6 +31,7 @@ const schema = z.object({
 // histórico que la abrió; el medio de pago se acredita por el monto
 // efectivamente pagado (override manual o el estimado con el TC de hoy); el
 // diferencial absorbe la diferencia para que el asiento cuadre.
+
 export async function POST(request: Request) {
   const session = await requireValidSession();
   if (!session) return NextResponse.json({ error: "No autenticado" }, { status: 401 });
@@ -42,16 +43,22 @@ export async function POST(request: Request) {
   if (!parsed.success) return NextResponse.json({ error: "Datos inválidos" }, { status: 400 });
   const { loteId, cuentaMedioPagoId } = parsed.data;
 
-  const [lote, config, cxp, medio] = await Promise.all([
+  const [lote, config, medio] = await Promise.all([
     prisma.lote.findUnique({ where: { id: loteId } }),
     getAppConfig(prisma),
-    prisma.cuenta.findUnique({ where: { codigo: CUENTA_CXP } }),
     prisma.cuenta.findUnique({ where: { id: cuentaMedioPagoId } }),
   ]);
   if (!lote) return NextResponse.json({ error: "Lote no encontrado" }, { status: 404 });
   if (lote.pagado) return NextResponse.json({ error: "Ese lote ya está pagado." }, { status: 400 });
-  if (!cxp) return NextResponse.json({ error: `Falta la cuenta '${CUENTA_CXP}' (Cuentas por pagar).` }, { status: 400 });
   if (!medio) return NextResponse.json({ error: "Medio de pago inválido." }, { status: 400 });
+
+  const cxp = await resolveCuentaCxpDelLote(lote.id);
+  if (!cxp) {
+    return NextResponse.json(
+      { error: `No se encontró la cuenta por pagar de este lote ni la cuenta '${CUENTA_CXP}' por defecto.` },
+      { status: 400 }
+    );
+  }
 
   // Monto que realmente sale de la cuenta de pago: override manual, o el
   // costo del lote estimado con el TC vigente HOY (lote.pagado sigue false
@@ -113,7 +120,7 @@ export async function POST(request: Request) {
     accion: "asiento.pago_lote",
     entidad: "Lote",
     entidadId: lote.id,
-    detalle: { montoCxpCent, montoPagadoCent, diferencialCent, medio: medio.nombre },
+    detalle: { montoCxpCent, montoPagadoCent, diferencialCent, medio: medio.nombre, cuentaCxp: cxp.codigo },
   });
   return NextResponse.json({ ok: true, montoCent: montoPagadoCent, diferencialCent });
 }

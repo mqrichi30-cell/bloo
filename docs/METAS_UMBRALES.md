@@ -18,7 +18,7 @@ Corte de datos: **16-ago-2026**. Fuente: base de datos de producción de la app 
 | Unidades compradas (acumulado) | 100 | `SUM(Lote.unidades)` |
 | Costo de compra acumulado | US$ 381,62 → ₡174.640 | `SUM(Lote.costoTotalUsdCent / costoTotalCent)` |
 | **Costo unitario pooled** | **₡1.746,40 /u (US$ 3,82)** | `SUM(costoTotalCent)/SUM(unidades)` |
-| Tipo de cambio vigente | ₡457,00 / USD | `AppConfig.tipoCambioUsdCent`, fuente BAC/BCCR ventanilla |
+| Tipo de cambio vigente | ₡449,24 / USD (19-sep-2026) | `AppConfig.tipoCambioUsdCent`. **Corregido**: este doc decía ₡457,00, valor congelado desde el 12-ago porque la fuente (ventanilla BCCR) murió y el error se tragaba en silencio. Fuente actual: mid-market (`currency-api`), ver README. Los números de costo de esta tabla se calcularon con ₡457 — están ~1,7% altos en colones. |
 | IVA | **Desactivado** (`ivaActivo=false`) | `AppConfig` — operación no formalizada |
 | Precio de lista (PVP) | ₡15.000 | `Model.precioVentaCent` |
 | Unidades vendidas | 38 (22 tickets) | `SUM(SaleItem.cantidad)` |

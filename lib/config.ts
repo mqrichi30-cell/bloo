@@ -3,9 +3,9 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 // Acepta tanto el cliente Prisma normal como el cliente de una transacción.
 type PrismaOrTx = PrismaClient | Prisma.TransactionClient;
 
-// Fallback si AppConfig nunca se creó: último BAC venta conocido al momento
-// de implementar el refresh automático (ver lib/tipo-cambio-bac.ts). El
-// refresh lazy lo actualiza solo apenas se carga Panel/Ajustes.
+// Fallback si AppConfig nunca se creó: valor conocido al momento de
+// implementar el refresh automático (ver lib/tipo-cambio-bac.ts). Es solo
+// semilla — el cron diario y el refresh lazy lo pisan con el valor real.
 export const DEFAULT_TIPO_CAMBIO_USD_CENT = 46000; // ₡460.00/USD
 export const DEFAULT_IVA_ACTIVO = false; // Cris no está formalizado todavía
 // Día de corte de la tarjeta de crédito (ver lib/lote.ts#computeFechaVencimientoPago).
@@ -26,8 +26,9 @@ export interface AppConfigValues {
  * lógica de venta vuelve a derivar base/IVA al 13% sin tocar código — los
  * campos `Sale.baseCent`/`ivaCent` siempre existen, listos para ese momento.
  *
- * `tipoCambioUsdCent` se actualiza solo (BAC/BCCR ventanilla, ver
- * lib/tipo-cambio-bac.ts) o a mano — ver `tipoCambioFuente`.
+ * `tipoCambioUsdCent` se actualiza solo (fuente mid-market, ver
+ * lib/tipo-cambio-bac.ts — la ventanilla del BCCR murió en agosto 2026) o a
+ * mano — ver `tipoCambioFuente`, que guarda cuál de las dos fue.
  */
 export async function getAppConfig(client: PrismaOrTx): Promise<AppConfigValues> {
   const config = await client.appConfig.findUnique({ where: { id: 1 } });

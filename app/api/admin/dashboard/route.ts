@@ -45,8 +45,14 @@ export async function GET(request: Request) {
   const { mode, year, month } = parsed.data;
 
   // Refresh lazy en background (ver /api/admin/config): el Panel es una de
-  // las dos superficies admin que lo dispara.
-  void refreshTipoCambioIfNeeded(prisma).catch(() => {});
+  // las dos superficies admin que lo dispara. Loguea el fallo en vez de
+  // tragarlo — el `.catch(() => {})` que había acá fue la mitad de por qué
+  // el TC estuvo congelado 37 días.
+  void refreshTipoCambioIfNeeded(prisma)
+    .then((r) => {
+      if (r.error) console.error("[tipo-cambio] refresh lazy falló (dashboard):", r.error);
+    })
+    .catch((e) => console.error("[tipo-cambio] refresh lazy rompió (dashboard):", e));
 
   const range = getPeriodRange(mode, year, month);
   const prevRange = getPreviousPeriodRange(mode, year, month);

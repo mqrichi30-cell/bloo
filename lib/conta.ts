@@ -1,4 +1,7 @@
+import type { Prisma, PrismaClient } from "@prisma/client";
 import { prisma } from "./prisma";
+
+type PrismaOrTx = PrismaClient | Prisma.TransactionClient;
 
 export const TIPOS = ["activo", "pasivo", "patrimonio", "ingreso", "gasto"] as const;
 export type TipoCuenta = (typeof TIPOS)[number];
@@ -29,6 +32,45 @@ export const CUENTA_DIFERENCIAL_CAMBIARIO = "5-2-003";
 // solo el destino contable del gasto. El cálculo está en lib/comision.ts
 // (módulo puro, compartido con los componentes cliente).
 export const CUENTA_COMISION_DATAFONO = "5-2-002";
+
+/**
+ * Qué cuenta se DEBITA al pagar el lote. No se puede hardcodear CUENTA_CXP:
+ * el pago tiene que cerrar exactamente el pasivo que abrió la compra, y no
+ * todas las compras lo abrieron contra '2-1-001'.
+ *
+ * Caso real (agosto 2026): los 4 lotes cargados por script acreditaron
+ * '2-1-003' (Sara los financió con su tarjeta, no es un proveedor). Con el
+ * código viejo, el botón "Registrar pago" del Panel debitaba '2-1-001' —
+ * dejaba la CxP real de Sara abierta y creaba un saldo deudor fantasma en
+ * proveedores. El asiento cuadraba, así que nada lo hubiera gritado.
+ *
+ * La fuente de verdad es el asiento `compra_lote` del propio lote: la cuenta
+ * que quedó al HABER es, por definición, el pasivo que hay que cancelar. Si
+ * hubiera más de una línea al haber (hoy no pasa), gana la de mayor monto.
+ * Si no existe el asiento (lote viejo cargado antes del libro diario), cae a
+ * CUENTA_CXP como antes. Se autocorrige sin migración ni cambio de UI.
+ */
+export async function resolveCuentaCxpDelLote(
+  loteId: string,
+  db: PrismaOrTx = prisma
+): Promise<{ id: string; codigo: string } | null> {
+  const compra = await db.asiento.findFirst({
+    where: { origen: "compra_lote", refId: loteId },
+    orderBy: { fecha: "asc" },
+    include: {
+      lineas: {
+        where: { haberCent: { gt: 0 } },
+        orderBy: { haberCent: "desc" },
+        include: { cuenta: { select: { id: true, codigo: true } } },
+      },
+    },
+  });
+
+  const cuenta = compra?.lineas[0]?.cuenta;
+  if (cuenta) return cuenta;
+
+  return db.cuenta.findUnique({ where: { codigo: CUENTA_CXP }, select: { id: true, codigo: true } });
+}
 
 // Naturaleza estándar por tipo (deudora crece con Debe; acreedora con Haber).
 export function naturalezaDeTipo(tipo: string): "deudora" | "acreedora" {

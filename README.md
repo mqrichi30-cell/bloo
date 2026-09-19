@@ -123,20 +123,29 @@ cambios adicionales.
   SQL. Qué venta cuenta para las cifras lo define un solo módulo (`lib/sale-estado.ts`),
   compartido por el Panel, la pantalla de Vender y la métrica pública de `/socios`.
   Historia del cierre: `docs/AUDITORIA_VENTAS_BORRADAS.md`.
-- **Tipo de cambio automático (BAC vía BCCR)**: `lib/tipo-cambio-bac.ts` hace fetch server-side
-  (nunca desde el cliente) a la página de ventanilla del BCCR, parsea con `cheerio` la fila
-  "Banco BAC San José S.A." y toma la columna Venta. Refresh **lazy**: al cargar
-  `/api/admin/config` o `/api/admin/dashboard` (Panel/Ajustes), si `tipoCambioActualizado` no
-  es de hoy (hora CR, offset fijo UTC-6) y hoy es día hábil, dispara el fetch en background
-  (no bloquea la respuesta). Fin de semana, fetch fallido, o feriado entre semana (sin
-  calendario de feriados cargado — ver nota en el código) → se mantiene el último valor
-  válido, **nunca rompe ni pone 0**. Botón "Actualizar ahora" en Perfil fuerza el fetch y
-  además funciona como "volver a automático" si estaba en manual.
-  `AppConfig.tipoCambioFuente` distingue `"manual"` (Cris editó a mano, no se pisa hasta el
-  día siguiente o hasta "Actualizar ahora") de `"BAC/BCCR ventanilla"` (automático).
-  Verificado en vivo: fetch real trae ₡460,00 (coincide con lo esperado), fallback probado
-  apuntando la URL a un endpoint roto (mantiene el último valor, responde 502 sin tocar la
-  DB), y el gate de fin de semana confirmado (hoy sábado en CR, el refresh pasivo no dispara).
+- **Tipo de cambio automático (mid-market)**: `lib/tipo-cambio-bac.ts` hace fetch server-side
+  (nunca desde el cliente) a `currency-api` (jsDelivr, campo `usd.crc`), con fallback a
+  `open.er-api.com` (`rates.CRC`). Las dos son gratis y sin token. **No es el tipo de venta de
+  ventanilla de un banco**: es el promedio de mercado, ~1-2% por debajo de lo que cobra el BAC.
+  Se aceptó ese sesgo a cambio de una fuente que no se cae.
+  *Historia*: la implementación original scrapeaba con `cheerio` la página de ventanilla del
+  BCCR (fila "Banco BAC San José"); el BCCR la borró el 13-ago-2026 (HTTP 404) y, como los
+  llamadores lazy se tragaban el error con `.catch(() => {})`, el TC quedó congelado 37 días.
+  Por eso ahora hay **tres capas**: (1) cron determinista
+  `netlify/functions/tipo-cambio.mjs` → `GET /api/cron/tipo-cambio`, 12:30 UTC L-V, que
+  **loguea `result.error` cuando falla**; (2) refresh **lazy** como red de seguridad, al cargar
+  `/api/admin/config` o `/api/admin/dashboard`, si `tipoCambioActualizado` no es de hoy (hora
+  CR, offset fijo UTC-6) y hoy es día hábil — en background, sin bloquear la respuesta y
+  logueando el fallo; (3) edición a mano en Perfil. Fin de semana, fetch fallido, o feriado
+  entre semana (sin calendario de feriados cargado — ver nota en el código) → se mantiene el
+  último valor válido, **nunca rompe ni pone 0**; además hay un rango de cordura (₡300-900) que
+  descarta respuestas raras. Botón "Actualizar ahora" en Perfil fuerza el fetch y funciona como
+  "volver a automático" si estaba en manual. `AppConfig.tipoCambioFuente` distingue `"manual"`
+  (Cris editó a mano; ni el cron ni el refresh pasivo lo pisan ese mismo día) de
+  `"mid-market (currency-api)"` (automático), y la UI muestra ese string tal cual — no rotula
+  la fuente a mano, que fue lo que hizo que "BAC (BCCR)" siguiera mintiendo un mes.
+  Auth del cron: si existe la env var `CRON_SECRET` se exige el header `x-cron-secret`; si no
+  existe, la ruta queda abierta (no expone datos ni acepta input).
   Los lotes ya creados no se recalculan; `Lote` sigue siendo inmutable — un lote nuevo puede
   cargar su propio tipo de cambio manual (`tipoCambioUsdCentOverride`) sin tocar el global.
 - **IVA desactivable (`AppConfig.ivaActivo`, default `false`)**: Cris no está formalizado ante

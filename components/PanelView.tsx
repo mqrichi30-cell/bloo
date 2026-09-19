@@ -235,7 +235,7 @@ export function PanelView() {
 
           <p className="mx-5 mb-6 text-caption text-ink-600">
             Tipo de cambio: ₡{(data.tipoCambio.usdCent / 100).toFixed(2)} ·{" "}
-            {data.tipoCambio.fuente === "manual" ? "manual" : "BAC (BCCR)"} · actualizado{" "}
+            {data.tipoCambio.fuente} · actualizado{" "}
             {formatTipoCambioActualizado(data.tipoCambio.actualizado)} ·{" "}
             <Link href="/perfil" className="underline underline-offset-2">
               editar

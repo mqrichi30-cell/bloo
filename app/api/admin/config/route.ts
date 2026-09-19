@@ -26,10 +26,17 @@ export async function GET() {
   const costoPorSku = await getCostoUnitarioPorSku();
 
   // Refresh LAZY en background: al cargar Panel/Ajustes se dispara el fetch
-  // a BAC/BCCR si toca (no es de hoy en hora CR + es día hábil). No se
-  // espera acá — la respuesta de esta carga sigue con el último valor
-  // cacheado; la próxima carga ya refleja el nuevo. Nunca rompe si falla.
-  void refreshTipoCambioIfNeeded(prisma).catch(() => {});
+  // si toca (no es de hoy en hora CR + es día hábil). No se espera acá — la
+  // respuesta de esta carga sigue con el último valor cacheado; la próxima
+  // carga ya refleja el nuevo. Nunca rompe si falla, PERO sí loguea: un
+  // `.catch(() => {})` vacío acá escondió durante 37 días que la fuente
+  // había muerto (ver historia en lib/tipo-cambio-bac.ts). El cron diario
+  // (app/api/cron/tipo-cambio) es el camino determinista; esto es la red.
+  void refreshTipoCambioIfNeeded(prisma)
+    .then((r) => {
+      if (r.error) console.error("[tipo-cambio] refresh lazy falló (config):", r.error);
+    })
+    .catch((e) => console.error("[tipo-cambio] refresh lazy rompió (config):", e));
 
   return NextResponse.json({ config, costoPorSku });
 }

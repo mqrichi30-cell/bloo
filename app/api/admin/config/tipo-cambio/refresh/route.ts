@@ -6,7 +6,7 @@ import { writeAudit } from "@/lib/audit";
 import { refreshTipoCambioIfNeeded } from "@/lib/tipo-cambio-bac";
 
 /**
- * "Actualizar ahora": fuerza el fetch a BAC/BCCR sin importar si ya se
+ * "Actualizar ahora": fuerza el fetch a la fuente automatica sin importar si ya se
  * actualizó hoy. También sirve como "volver a automático" — si el tipo de
  * cambio estaba en manual, esto lo trae de vuelta a la fuente automática.
  */
@@ -35,7 +35,7 @@ export async function POST(request: Request) {
   if (!result.refreshed) {
     return NextResponse.json(
       {
-        error: `No se pudo actualizar desde BAC/BCCR: ${result.error ?? "error desconocido"}. Se mantiene ₡${(
+        error: `No se pudo actualizar el tipo de cambio: ${result.error ?? "error desconocido"}. Se mantiene ₡${(
           result.tipoCambioUsdCent / 100
         ).toFixed(2)}.`,
         config: result,
