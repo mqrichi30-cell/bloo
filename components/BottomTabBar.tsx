@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ChartBar, ShoppingBag, Package, Glasses, CircleUser, NotebookText } from "lucide-react";
+import { ChartBar, ShoppingBag, Package, Glasses, CircleUser, NotebookText, Store } from "lucide-react";
 import type { Role } from "@/lib/session";
 
 interface Tab {
@@ -20,13 +20,14 @@ const VENDEDOR_TABS: Tab[] = [
 ];
 
 // /conta antes solo estaba enlazada desde el Panel, así que el módulo contable
-// era invisible. "Inventario" se abrevia a "Stock" porque con 6 pestañas a
-// 375px de ancho esa etiqueta se desbordaba.
+// era invisible. "Inventario" se abrevia a "Stock" y "Marketplace" a "Market"
+// porque con 7 pestañas a 375px de ancho las etiquetas largas se desbordaban.
 const ADMIN_TABS: Tab[] = [
   { href: "/panel", label: "Panel", icon: ChartBar },
   { href: "/vender", label: "Vender", icon: ShoppingBag },
   { href: "/inventario", label: "Stock", icon: Package },
   { href: "/modelos", label: "Modelos", icon: Glasses },
+  { href: "/marketplace", label: "Market", icon: Store },
   { href: "/conta", label: "Conta", icon: NotebookText },
   { href: "/perfil", label: "Perfil", icon: CircleUser },
 ];

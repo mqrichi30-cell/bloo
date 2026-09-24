@@ -3,7 +3,7 @@ import { formatCRC } from "@/lib/money";
 import { StockBadge } from "@/components/ui/StockBadge";
 
 interface ModelCardProps {
-  model: { id: string; nombre: string; fotoUrl: string | null; precioVentaCent: number; stockQty: number };
+  model: { id: string; nombre: string; descripcion?: string | null; fotoUrl: string | null; precioVentaCent: number; stockQty: number };
   onPress?: () => void;
 }
 
@@ -29,6 +29,9 @@ export function ModelCard({ model, onPress }: ModelCardProps) {
       </div>
       <div className="flex flex-col gap-1 p-3">
         <p className="truncate text-label text-ink-900">{model.nombre}</p>
+        {model.descripcion && (
+          <p className="truncate text-[11px] text-ink-600">{model.descripcion}</p>
+        )}
         <p className="tabular-nums text-data-md text-ink-900">{formatCRC(model.precioVentaCent)}</p>
         <StockBadge qty={model.stockQty} />
       </div>

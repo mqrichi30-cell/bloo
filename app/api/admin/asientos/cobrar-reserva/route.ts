@@ -39,32 +39,51 @@ export async function POST(request: Request) {
 
   const montoCent = parsed.data.montoCent ?? reserva.precioUnitCent * reserva.cantidad;
 
-  await prisma.$transaction([
-    prisma.asiento.create({
-      data: {
-        fecha: new Date(),
-        glosa: `Cobro de reserva con ${medio.nombre}`,
-        origen: "cobro_reserva",
-        refId: reserva.id,
-        userId: session.userId!,
-        lineas: {
-          create: [
-            { cuentaId: medio.id, debeCent: montoCent, haberCent: 0 },
-            { cuentaId: ingresos.id, debeCent: 0, haberCent: montoCent },
-          ],
+  try {
+    await prisma.$transaction(async (tx) => {
+      // Guard de estado DENTRO de la transacción: dos clics simultáneos
+      // pasaban ambos el chequeo de arriba y duplicaban asiento y descuento.
+      const marcada = await tx.reserva.updateMany({
+        where: { id: reserva.id, estado: "activa" },
+        data: { estado: "entregada", entregadaEn: new Date() },
+      });
+      if (marcada.count !== 1) throw new Error("RESERVA_NO_ACTIVA");
+
+      await tx.asiento.create({
+        data: {
+          fecha: new Date(),
+          glosa: `Cobro de reserva con ${medio.nombre}`,
+          origen: "cobro_reserva",
+          refId: reserva.id,
+          userId: session.userId!,
+          lineas: {
+            create: [
+              { cuentaId: medio.id, debeCent: montoCent, haberCent: 0 },
+              { cuentaId: ingresos.id, debeCent: 0, haberCent: montoCent },
+            ],
+          },
         },
-      },
-    }),
-    prisma.reserva.update({
-      where: { id: reserva.id },
-      data: { estado: "entregada", entregadaEn: new Date() },
-    }),
-    // liberar el stock reservado del modelo
-    prisma.model.update({
-      where: { id: reserva.modelId },
-      data: { stockReservado: { decrement: reserva.cantidad } },
-    }),
-  ]);
+      });
+
+      // Entregar = el par SALE del inventario: se libera lo apartado Y se
+      // descuenta el físico. Hasta 2026-09-23 solo se hacía lo primero, así
+      // que `stockQty − stockReservado` SUBÍA al entregar (stock fantasma) y
+      // el loop de Marketplace nunca veía el agotado. Sin guard de negativo,
+      // mismo criterio que app/api/sales (stock negativo permitido).
+      await tx.model.update({
+        where: { id: reserva.modelId },
+        data: {
+          stockReservado: { decrement: reserva.cantidad },
+          stockQty: { decrement: reserva.cantidad },
+        },
+      });
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message === "RESERVA_NO_ACTIVA") {
+      return NextResponse.json({ error: "Esa reserva ya no está activa." }, { status: 400 });
+    }
+    throw error;
+  }
   await writeAudit({
     userId: session.userId,
     accion: "asiento.cobro_reserva",

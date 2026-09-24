@@ -11,6 +11,7 @@ export default function LoginPage() {
   const router = useRouter();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [rememberMe, setRememberMe] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -21,7 +22,7 @@ export default function LoginPage() {
     try {
       const data = await apiFetch<{ role: "admin" | "vendedor" }>("/api/auth/login", {
         method: "POST",
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify({ username, password, rememberMe }),
       });
       router.push(data.role === "admin" ? "/panel" : "/vender");
       router.refresh();
@@ -83,6 +84,16 @@ export default function LoginPage() {
           onChange={(e) => setPassword(e.target.value)}
           required
         />
+
+        <label className="flex cursor-pointer items-center gap-2.5">
+          <input
+            type="checkbox"
+            checked={rememberMe}
+            onChange={(e) => setRememberMe(e.target.checked)}
+            className="h-4 w-4 accent-navy-700 rounded"
+          />
+          <span className="text-caption text-ink-600">Mantener sesión iniciada</span>
+        </label>
 
         {error && (
           <p role="alert" className="rounded-sm bg-error-bg px-3 py-2 text-caption text-error-text">

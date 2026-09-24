@@ -9,8 +9,8 @@ export default async function WorkLayout({ children }: { children: React.ReactNo
 
   return (
     <RoleProvider role={session.role!} nombre={session.nombre ?? ""}>
-      <div className="mobile-shell flex min-h-dvh flex-col">
-        <main className="flex-1 pb-4">{children}</main>
+      <div className="mobile-shell flex h-dvh flex-col">
+        <main className="flex-1 overflow-y-auto pb-4">{children}</main>
         <BottomTabBar role={session.role!} />
       </div>
     </RoleProvider>

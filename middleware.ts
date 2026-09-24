@@ -5,6 +5,7 @@ import {
   isSessionExpired,
   CSRF_COOKIE_NAME,
   ABSOLUTE_TIMEOUT_MS,
+  REMEMBER_ME_TIMEOUT_MS,
   type SessionData,
 } from "@/lib/session";
 
@@ -26,6 +27,24 @@ const PUBLIC_API_PATHS = [
   "/api/cron/tipo-cambio",
   "/api/socios",
   "/api/socios/avance",
+  // Máquina a máquina, sin sesión: cron diario de Marketplace
+  // (netlify/functions/marketplace-sync.mjs) y worker de imágenes IA (GitHub
+  // Actions). Cada ruta exige `x-cron-secret` y responde 503 si CRON_SECRET
+  // no está configurado — fail-closed, ver lib/marketplace/cron-auth.ts.
+  "/api/cron/marketplace-sync",
+  "/api/imagegen/claim",
+  "/api/imagegen/pending-count",
+  // Webhook de Messenger: lo llama Meta, sin sesión. La ruta valida el
+  // verify token (GET) y la firma X-Hub-Signature-256 (POST).
+  "/api/meta/webhook",
+];
+
+// Rutas públicas con un segmento dinámico. Regex ANCLADAS (^...$) y con el
+// segmento limitado a [^/]+: mismo espíritu que la lista exacta de arriba, no
+// un prefijo que deje pasar rutas futuras.
+const PUBLIC_API_PATTERNS = [
+  // Resultado del worker de imágenes: /api/imagegen/<id>/result (x-cron-secret).
+  /^\/api\/imagegen\/[^/]+\/result$/,
 ];
 
 /**
@@ -46,6 +65,7 @@ export async function middleware(request: NextRequest) {
   if (
     PUBLIC_PATHS.includes(pathname) ||
     PUBLIC_API_PATHS.includes(pathname) ||
+    PUBLIC_API_PATTERNS.some((re) => re.test(pathname)) ||
     pathname.startsWith("/_next") ||
     isStaticAsset
   ) {
@@ -99,7 +119,7 @@ export async function middleware(request: NextRequest) {
       secure: process.env.NODE_ENV === "production",
       sameSite: "strict",
       path: "/",
-      maxAge: ABSOLUTE_TIMEOUT_MS / 1000,
+      maxAge: session.rememberMe ? REMEMBER_ME_TIMEOUT_MS / 1000 : ABSOLUTE_TIMEOUT_MS / 1000,
     });
   }
 

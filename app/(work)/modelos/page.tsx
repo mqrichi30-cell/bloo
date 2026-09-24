@@ -14,6 +14,7 @@ import { apiFetch } from "@/lib/api-client";
 interface ModelItem {
   id: string;
   nombre: string;
+  descripcion: string | null;
   fotoUrl: string | null;
   precioVentaCent: number;
   stockQty: number;

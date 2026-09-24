@@ -7,6 +7,8 @@ import { formatCRC } from "@/lib/money";
 export interface PickableModel {
   id: string;
   nombre: string;
+  descripcion?: string | null;
+  categoria?: string | null;
   fotoUrl: string | null;
   precioVentaCent: number;
   stockQty: number;

@@ -9,12 +9,14 @@ export interface SessionData {
   role?: Role;
   nombre?: string;
   csrfToken?: string;
-  createdAt?: number; // epoch ms — para timeout absoluto (24h)
-  lastActive?: number; // epoch ms — para timeout de inactividad (30min)
+  createdAt?: number; // epoch ms — para timeout absoluto
+  lastActive?: number; // epoch ms — para timeout de inactividad (30min, ignorado si rememberMe)
+  rememberMe?: boolean; // si true: timeout 30 días absoluto, sin idle check
 }
 
 export const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 export const ABSOLUTE_TIMEOUT_MS = 24 * 60 * 60 * 1000;
+export const REMEMBER_ME_TIMEOUT_MS = 30 * 24 * 60 * 60 * 1000;
 
 // Validación LAZY: solo al usarse en runtime (no al importar el módulo), para
 // que `next build` pueda importar rutas sin exigir el secreto en build-time.
@@ -38,7 +40,7 @@ export const sessionOptions = {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "strict" as const,
-    maxAge: ABSOLUTE_TIMEOUT_MS / 1000,
+    maxAge: REMEMBER_ME_TIMEOUT_MS / 1000,
     path: "/",
   },
 };
@@ -49,9 +51,12 @@ export async function getSession(): Promise<IronSession<SessionData>> {
   return getIronSession<SessionData>(cookies(), sessionOptions);
 }
 
-export function isSessionExpired(session: Pick<SessionData, "createdAt" | "lastActive">): boolean {
+export function isSessionExpired(session: Pick<SessionData, "createdAt" | "lastActive" | "rememberMe">): boolean {
   if (!session.createdAt || !session.lastActive) return true;
   const now = Date.now();
+  if (session.rememberMe) {
+    return now - session.createdAt > REMEMBER_ME_TIMEOUT_MS;
+  }
   if (now - session.createdAt > ABSOLUTE_TIMEOUT_MS) return true;
   if (now - session.lastActive > IDLE_TIMEOUT_MS) return true;
   return false;

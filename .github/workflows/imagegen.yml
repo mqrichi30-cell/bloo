@@ -1,0 +1,87 @@
+# bloo product-image worker (imagegen/). Free tiers only; see docs/IMAGE_PROVIDERS.md.
+# Product pixels are cut out locally (BiRefNet) and composited over AI-generated background plates.
+name: imagegen
+
+on:
+  schedule:
+    - cron: "17 */4 * * *" # every 4 h (off the :00 rush)
+  workflow_dispatch:
+    inputs:
+      max_jobs:
+        description: "Max jobs this run"
+        default: "12"
+      max_minutes:
+        description: "Time budget (minutes)"
+        default: "20"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: imagegen
+  cancel-in-progress: false
+
+jobs:
+  imagegen:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      BLOO_URL: https://bloo-panel.netlify.app
+    steps:
+      # Cheap gate: no Python, no model download when there is nothing to do.
+      - name: Check pending jobs
+        id: pending
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          body=$(curl -fsS --max-time 30 -H "x-cron-secret: ${CRON_SECRET}" "${BLOO_URL}/api/imagegen/pending-count")
+          count=$(printf '%s' "$body" | jq -r '.count // 0')
+          echo "pending jobs: ${count}"
+          echo "count=${count}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        if: steps.pending.outputs.count != '0'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: imagegen
+          persist-credentials: false
+
+      - name: Set up Python
+        if: steps.pending.outputs.count != '0'
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: imagegen/requirements.txt
+
+      - name: Cache rembg / BiRefNet weights
+        if: steps.pending.outputs.count != '0'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.u2net
+          key: rembg-${{ vars.IMAGEGEN_REMBG_MODEL || 'birefnet-general' }}-v1
+
+      - name: Install dependencies
+        if: steps.pending.outputs.count != '0'
+        working-directory: imagegen
+        run: pip install -r requirements.txt
+
+      - name: Run worker
+        if: steps.pending.outputs.count != '0'
+        working-directory: imagegen
+        env:
+          U2NET_HOME: ~/.u2net
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          POLLINATIONS_TOKEN: ${{ secrets.POLLINATIONS_TOKEN }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_ALLOW_PAID: ${{ vars.GEMINI_ALLOW_PAID }}
+          IMAGEGEN_REMBG_MODEL: ${{ vars.IMAGEGEN_REMBG_MODEL }}
+          MAX_JOBS: ${{ github.event.inputs.max_jobs || '12' }}
+          MAX_MINUTES: ${{ github.event.inputs.max_minutes || '20' }}
+        run: python -m imagegen.run --max-jobs "$MAX_JOBS" --max-minutes "$MAX_MINUTES"

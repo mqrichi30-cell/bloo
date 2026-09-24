@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getSession, CSRF_COOKIE_NAME } from "@/lib/session";
+import { getSession, CSRF_COOKIE_NAME, REMEMBER_ME_TIMEOUT_MS } from "@/lib/session";
 import { checkLockout, recordLoginAttempt, verifyPasswordTimingSafe, getClientIp } from "@/lib/auth";
 import { generateCsrfToken } from "@/lib/csrf";
 import { loginSchema } from "@/lib/validation";
@@ -26,7 +26,7 @@ export async function POST(request: Request) {
   // Normalizar: el teclado móvil (iOS) auto-capitaliza el primer campo -> "Admin".
   // El username es case-insensitive: lo bajamos a minúsculas + trim antes de buscar.
   const username = parsed.data.username.trim().toLowerCase();
-  const { password } = parsed.data;
+  const { password, rememberMe } = parsed.data;
 
   // Lockout keyeado SOLO por username (ver lib/auth.ts: IP es falsificable sin
   // un reverse proxy de confianza delante).
@@ -69,6 +69,7 @@ export async function POST(request: Request) {
   session.csrfToken = csrfToken;
   session.createdAt = now;
   session.lastActive = now;
+  session.rememberMe = rememberMe ?? false;
   await session.save();
 
   const response = NextResponse.json({
@@ -82,7 +83,7 @@ export async function POST(request: Request) {
     secure: process.env.NODE_ENV === "production",
     sameSite: "strict",
     path: "/",
-    maxAge: 60 * 60 * 24,
+    maxAge: rememberMe ? REMEMBER_ME_TIMEOUT_MS / 1000 : 60 * 60 * 24,
   });
 
   return response;

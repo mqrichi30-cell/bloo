@@ -60,6 +60,15 @@ p {
   font-variant-numeric: tabular-nums;
 }
 
+/* Carrusel de fotos del kit de Marketplace: scroll-snap táctil sin scrollbar visible. */
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
 :focus-visible {
   outline: none;
   box-shadow: 0 0 0 3px var(--focus-ring);

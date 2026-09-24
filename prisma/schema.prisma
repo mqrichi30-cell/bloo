@@ -170,14 +170,41 @@ model Model {
   // físicamente en inventario hasta entregarse. Ver modelo Reserva.
   stockReservado Int @default(0)
 
+  // "lente" | "accesorio" | "optico". Reemplaza a `categoria` como criterio
+  // de "qué es un lente de sol": `categoria` es texto libre y quedó
+  // inconsistente ('Lentes de sol' / 'lentes' / 'Accesorios'). Solo
+  // tipo='lente' se publica en Marketplace (estuches, paños y ópticos nunca).
+  // CHECK en Postgres + backfill heurístico revisado a mano: ver
+  // prisma/migrations/20260923000000_marketplace y
+  // scripts/2026-09-23-marketplace.mjs.
+  tipo String @default("lente")
+
+  // Atributos que el asistente de Marketplace puede AFIRMAR (docs/
+  // MARKETPLACE_COPY.md §2, regla 1: solo lo que está en el contexto). null =
+  // "no confirmado": uv/polarizado en null NO se afirman ni se niegan.
+  // `color` es el color del par (un Model = un color = una publicación).
+  // `material` SIN default a propósito (Ley 7472, publicidad veraz): solo se
+  // llena cuando el proveedor dice "acetate" explícito. null = no confirmado,
+  // y el kit y la IA omiten la frase de material (nunca "plástico", por voz
+  // de marca). OJO: en Nihao "PC/AC Lens Material" habla del LENTE, no del
+  // marco, y AC = acrílico — no es evidencia de acetato.
+  color      String?
+  material   String?
+  uv         Boolean?
+  polarizado Boolean?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  saleItems SaleItem[]
-  reservas  Reserva[]
-  lotes     Lote[]
+  saleItems       SaleItem[]
+  reservas        Reserva[]
+  lotes           Lote[]
+  nihaoVariants   NihaoVariant[]
+  channelListings ChannelListing[]
+  generatedImages GeneratedImage[]
 
   @@index([activo])
+  @@index([tipo, activo])
 }
 
 // Lote de compra de inventario, atado al MODELO/SKU que recibió sus unidades
@@ -314,8 +341,36 @@ model SaleItem {
 
   createdAt DateTime @default(now())
 
+  nihaoVariant NihaoVariant?
+
   @@index([saleId])
   @@index([modelId])
+}
+
+// Unidad física individual comprada en un pedido de Nihao.
+// Una fila por color/par recibido — es la "pieza única" del catálogo de bloo.
+// Cuando Cris vende un par y confirma la venta, selecciona la variante exacta
+// y esta queda ligada al SaleItem (disponible→false).
+// NO toca accounting: el costeo sigue por Model+Lote (CPPM por SKU).
+model NihaoVariant {
+  id          String   @id @default(uuid())
+  nihaoSku    String              // SKU de Nihao (ej. "GLS-2024-BK-1")
+  nihaoColor  String              // Color exacto como aparece en Nihao (ej. "Black/Grey")
+  productName String              // Nombre del producto en Nihao
+  imageUrl    String              // URL de imagen CDN de Nihao, ya filtraba por color
+  orderRef    String              // Número de orden Nihao (ej. "NHCR608282322226")
+
+  modelId     String
+  model       Model    @relation(fields: [modelId], references: [id])
+
+  disponible  Boolean  @default(true)   // false cuando está asignada a una venta
+  saleItemId  String?  @unique          // null = disponible, set = vendida
+  saleItem    SaleItem? @relation(fields: [saleItemId], references: [id])
+
+  createdAt   DateTime @default(now())
+
+  @@index([modelId, disponible])
+  @@index([orderRef])
 }
 
 // DEVOLUCIÓN de mercadería: el cliente trajo el producto de vuelta. Es un
@@ -491,4 +546,96 @@ model LineaAsiento {
 
   @@index([asientoId])
   @@index([cuentaId])
+}
+
+// ============================================================
+// MARKETPLACE — kit de publicación manual + pipeline de imágenes IA
+// ============================================================
+//
+// No existe API de Meta para publicar en Marketplace desde CR: la app PREPARA
+// el kit (título, descripción, fotos) y Cris publica a mano con 1 toque. Por
+// eso el estado de la publicación lo mueven dos actores: el loop diario
+// (lib/marketplace/sync.ts, detecta cambios de inventario) y Cris (marca
+// publicado / vendido desde /marketplace). Una publicación por color = una
+// fila por Model.
+
+// status: "esperando_imagenes" | "listo_para_publicar" | "publicado"
+//       | "agotado_marcar_vendido" | "vendido" | "pausado"
+// (máquina de estados en lib/marketplace/status.ts — no escribir literales
+// sueltos en otro lado).
+model ChannelListing {
+  id            String    @id @default(uuid())
+  modelId       String
+  model         Model     @relation(fields: [modelId], references: [id])
+  canal         String    @default("marketplace")
+  status        String    @default("esperando_imagenes")
+  // Disponible (stockQty − stockReservado) visto en la última sincronización.
+  lastStockSeen Int       @default(0)
+  // sha256 del kit (título+descripción+precio) al marcarse publicado: si el
+  // kit actual difiere, la publicación en Marketplace quedó desactualizada
+  // (ej. cambió el precio) y hay que editarla a mano.
+  contentHash   String?
+  publishedAt   DateTime?
+  soldAt        DateTime?
+  // Link de la publicación en Marketplace, pegado por Cris.
+  externalUrl   String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@unique([modelId, canal])
+  @@index([status])
+}
+
+// Imagen generada por IA para el kit. APPEND-ONLY: regenerar = fila nueva y la
+// vieja pasa a "rechazada"; nunca se borra (trigger en Postgres). Así queda
+// rastro de qué se generó, con qué proveedor, y cuántos intentos costó.
+// variant: "hero" | "flatlay" | "detail"
+// estado:  "pendiente" | "generando" | "lista" | "rechazada" | "error"
+// La cola la consume un worker Python en GitHub Actions vía /api/imagegen/**.
+model GeneratedImage {
+  id            String    @id @default(uuid())
+  modelId       String
+  model         Model     @relation(fields: [modelId], references: [id])
+  variant       String
+  estado        String    @default("pendiente")
+  // Foto de referencia (CDN de Nihao del color exacto) que recibe el worker.
+  sourceUrl     String
+  publicUrl     String?
+  // Versión 4:5 (vertical) de la misma imagen, para Marketplace/Instagram.
+  portraitUrl   String?
+  storagePath   String?
+  provider      String?
+  attempts      Int       @default(0)
+  lastError     String?
+  nextAttemptAt DateTime?
+  // Lease del worker: vencido = el worker murió, se puede re-reclamar.
+  lockedUntil   DateTime?
+  qa            Json?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([estado, nextAttemptAt])
+  @@index([modelId, variant])
+}
+
+// Conversación de Messenger de la PÁGINA (no del perfil personal) con un
+// comprador. La usa app/api/meta/webhook (otro módulo): saludo único,
+// throttling de respuestas IA y derivación a humano.
+model MetaConversation {
+  id            String    @id @default(uuid())
+  psid          String    @unique
+  pageId        String
+  greetedAt     DateTime?
+  lastMessageAt DateTime?
+  lastReplyAt   DateTime?
+  // Mensajes RECIBIDOS del comprador. No se mezcla con el tope de IA.
+  messageCount  Int       @default(0)
+  handedOff     Boolean   @default(false)
+  // mid del último mensaje procesado: Meta reintenta webhooks, esto evita
+  // contestar dos veces el mismo mensaje.
+  lastMid       String?
+  // Tope móvil de respuestas IA por 24h: contador + inicio de la ventana.
+  aiReplyCount  Int       @default(0)
+  aiWindowStart DateTime?
+  createdAt     DateTime  @default(now())
 }
