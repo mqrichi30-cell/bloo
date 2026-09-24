@@ -45,6 +45,12 @@ export async function POST(request: Request, { params }: { params: { id: string 
   const qa =
     b.qa === undefined ? undefined : b.qa === null ? Prisma.JsonNull : b.qa;
 
+  // 'quota_wait' = el proveedor gratis (ZeroGPU/HF) dijo "esperá", no que la
+  // imagen falló. No debe consumir uno de los IMAGE_MAX_ATTEMPTS: si contara,
+  // unas pocas horas de cuota agotada matarían la cola entera para siempre.
+  // Se devuelve el intento que sumó el claim y se reprograma a retryAfterSeconds.
+  const esQuotaWait = b.estado === "error" && b.error === "quota_wait";
+
   const data: Prisma.GeneratedImageUpdateManyMutationInput =
     b.estado === "lista"
       ? {
@@ -63,7 +69,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
             estado: "error",
             provider: b.provider,
             qa,
-            lastError: b.error ?? "error sin detalle",
+            lastError: esQuotaWait ? "quota_wait" : b.error ?? "error sin detalle",
             lockedUntil: null,
             nextAttemptAt: new Date(ahora.getTime() + (b.retryAfterSeconds ?? IMAGE_DEFAULT_RETRY_SECONDS) * 1000),
           }
@@ -80,6 +86,13 @@ export async function POST(request: Request, { params }: { params: { id: string 
   const resultado = await prisma.$transaction(async (tx) => {
     const r = await tx.generatedImage.updateMany({ where: { id: idParsed.data, estado: "generando" }, data });
     if (r.count !== 1) return null;
+    if (esQuotaWait) {
+      // GREATEST: nunca bajo 0 (updateMany con decrement no sabe acotar).
+      await tx.$executeRaw`
+        UPDATE "bloo"."GeneratedImage"
+           SET "attempts" = GREATEST("attempts" - 1, 0)
+         WHERE "id" = ${idParsed.data}`;
+    }
     const img = await tx.generatedImage.findUniqueOrThrow({
       where: { id: idParsed.data },
       select: { modelId: true, variant: true, attempts: true },
