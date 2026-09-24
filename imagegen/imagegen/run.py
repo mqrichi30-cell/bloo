@@ -34,8 +34,18 @@ JPEG_Q = int(env("IMAGEGEN_JPEG_QUALITY", "88") or 88)
 OUT_DIR = Path(__file__).resolve().parent.parent / "out"
 
 
+QUOTA_WAIT = "quota_wait"  # backend: does NOT consume one of the job's attempts
+MAX_RETRY_AFTER = 7 * 86400  # backend schema cap
+
+
 def _err(msg: str, **extra: Any) -> dict[str, Any]:
     return {"estado": "error", "error": msg[:500], **extra}
+
+
+def _quota_wait(reset_at: float, why: str) -> dict[str, Any]:
+    """Quota-caused failure: reschedule without burning an attempt (detail goes in qa)."""
+    wait = int(min(max(60, math.ceil(reset_at - now_ts())), MAX_RETRY_AFTER))
+    return _err(QUOTA_WAIT, retryAfterSeconds=wait, qa={"quota": why[:300]})
 
 
 def _provider_of(plate_path: str) -> str:
@@ -108,31 +118,47 @@ def run_worker(max_jobs: int, max_minutes: float, once: bool = False) -> int:
     state: dict[str, Any] = storage.read_json(PROVIDER_STATE, {})
     chain = ProviderChain(state)
     pool = PlatePool(storage, chain)
-    configured = [p.name for p in chain.providers if p.configured()]
+    configured = [p.key for p in chain.providers if p.configured()]
     log.info("providers configured: %s", ", ".join(configured) or "none")
 
     done = ok = 0
     exhausted_until: float | None = None
+    seen: set[str] = set()
 
     def persist() -> None:
         storage.write_json(PROVIDER_STATE, state)
         pool.save()
 
+    def servable() -> list[str]:
+        return [v for v in VARIANTS if pool.can_serve(v)]
+
     try:
         avg = 180.0  # pessimistic first guess (BiRefNet on a CI CPU), refined as jobs finish
-        while done < max_jobs and exhausted_until is None:
+        while done < max_jobs:
             left = deadline - time.monotonic()
             if left < avg * 1.3:
                 log.info("stopping: %.0fs left, avg job %.0fs", left, avg)
+                break
+            can = servable()  # never claim unless some plate can actually be obtained
+            if not can:
+                exhausted_until = chain.earliest_reset()
+                log.info("no cached plate and no provider available; not claiming")
                 break
             jobs = api.claim(1)  # one at a time: never hold claims we cannot finish
             if not jobs:
                 break
             for job in jobs:
                 done += 1
-                if exhausted_until is not None:
-                    wait = max(60, math.ceil(exhausted_until - now_ts()))
-                    api.report(job.image_id, _err("all_providers_exhausted", retryAfterSeconds=wait))
+                variant = job.variant if job.variant in VARIANTS else "hero"
+                if job.image_id in seen:  # backend handed back a job we already deferred: stop
+                    api.report(job.image_id, _quota_wait(chain.earliest_reset(), "re-claimed in same run"))
+                    done = max_jobs
+                    continue
+                seen.add(job.image_id)
+                if variant not in can:
+                    reset = chain.earliest_reset()
+                    api.report(job.image_id, _quota_wait(reset, f"no plate for variant {variant}"))
+                    log.info("job %s (%s) -> quota_wait: no plate for %s", job.image_id, job.model_id, variant)
                     continue
                 if time.monotonic() > deadline - 30:
                     api.report(job.image_id, _err("time_budget_exceeded", retryAfterSeconds=60))
@@ -142,21 +168,21 @@ def run_worker(max_jobs: int, max_minutes: float, once: bool = False) -> int:
                     payload = process_job(job, pool, storage)
                 except QuotaExhausted as e:
                     exhausted_until = e.reset_at
-                    wait = max(60, math.ceil(e.reset_at - now_ts()))
-                    payload = _err("all_providers_exhausted", retryAfterSeconds=wait)
+                    payload = _quota_wait(e.reset_at, str(e))
                 except Exception as e:  # noqa: BLE001 - every claimed job must be reported
                     log.exception("job %s failed", job.image_id)
                     payload = _err(f"{type(e).__name__}: {e}")
                 api.report(job.image_id, payload)
                 ok += payload["estado"] == "lista"
                 avg = 0.5 * avg + 0.5 * (time.monotonic() - t0) if done > 1 else time.monotonic() - t0
-                log.info("job %s (%s/%s) -> %s in %.0fs", job.image_id, job.model_id, job.variant,
-                         payload["estado"], time.monotonic() - t0)
+                log.info("job %s (%s/%s) -> %s%s in %.0fs", job.image_id, job.model_id, job.variant,
+                         payload["estado"], f" ({payload['error']})" if payload.get("error") else "",
+                         time.monotonic() - t0)
                 persist()
     finally:
         persist()
     if exhausted_until is not None:
-        log.warning("all providers exhausted; earliest reset in %ds", int(exhausted_until - now_ts()))
+        log.warning("no plate source left; earliest provider reset in %ds", int(exhausted_until - now_ts()))
     log.info("done: %d processed, %d lista", done, ok)
     return 0
 
@@ -173,7 +199,9 @@ def next_wait() -> int:
         else:
             storage = Storage(env("SUPABASE_URL") or "", env("SUPABASE_SERVICE_KEY") or "", BUCKET)
             chain = ProviderChain(storage.read_json(PROVIDER_STATE, {}) or {})
-            wait = 300 if chain.any_available() else int(chain.earliest_reset() - now_ts()) + 60
+            # cached plates may still serve jobs: those are only known after a Storage listing, so
+            # a short wait when providers are out keeps the pool in use without hammering anything
+            wait = 300 if chain.any_available() else min(1800, int(chain.earliest_reset() - now_ts()) + 60)
     except Exception as e:  # noqa: BLE001 - network hiccup / bad state: just try again later
         log.warning("next-wait fallback: %s", type(e).__name__)
     return int(min(max(wait, 60), 86400))

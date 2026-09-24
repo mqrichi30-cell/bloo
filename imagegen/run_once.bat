@@ -15,6 +15,8 @@ if not exist ".env.local" (
   exit /b 2
 )
 for /f "usebackq eol=# tokens=1* delims==" %%A in (".env.local") do set "%%A=%%B"
+REM IP-scoped quotas (anonymous ZeroGPU) are tracked per host in state/providers.json
+if not defined RUNNER_KIND set "RUNNER_KIND=local"
 
 ".venv\Scripts\python.exe" -m imagegen.run --once --max-jobs 12 --max-minutes 25 >> "logs\worker.log" 2>&1
 exit /b %ERRORLEVEL%

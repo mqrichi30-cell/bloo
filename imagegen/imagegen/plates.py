@@ -13,8 +13,8 @@ from .providers import ProviderChain, QuotaExhausted
 from .storage import Storage
 from .util import compact_ts, log
 
-MAX_USES = 5  # each plate is reused at most this many times
-MIN_POOL = 4  # generate a fresh plate when fewer plates with remaining uses exist
+MAX_USES = 15  # plates are generic backgrounds (the product differs every time): reuse a lot
+MIN_POOL = 8  # generate a fresh plate (quota permitting) while fewer plates have uses left
 GEN_TRIES = 3  # provider calls per plate request (rejected plates count toward quota)
 PLATE_STATE = "state/plates.json"
 
@@ -99,6 +99,14 @@ class PlatePool:
     def _fresh(self, variant: str) -> list[str]:
         return [p for p in self._plates(variant) if self.uses.get(p, 0) < MAX_USES]
 
+    def has_cached(self, variant: str) -> bool:
+        """A stored plate with uses left exists (it is re-validated on acquire)."""
+        return bool(self._fresh(variant))
+
+    def can_serve(self, variant: str) -> bool:
+        """Worth claiming a job of this variant: a reusable plate exists or a provider can make one."""
+        return self.has_cached(variant) or self.chain.any_available()
+
     def retire(self, path: str, why: str) -> None:
         log.info("retiring plate %s (%s)", path, why)
         self.uses[path] = MAX_USES
@@ -126,7 +134,7 @@ class PlatePool:
     def acquire(self, variant: str) -> tuple[Image.Image, str]:
         """Return a validated (plate image, storage path). Raises QuotaExhausted only when nothing is usable."""
         fresh = self._fresh(variant)
-        if len(fresh) < MIN_POOL:
+        if len(fresh) < MIN_POOL and self.chain.any_available():
             try:
                 path, img = self._generate(variant)
                 self.uses[path] = 1
@@ -139,7 +147,8 @@ class PlatePool:
                 if not fresh:
                     raise
                 log.warning("plate generation failed (%s); reusing cache", e)
-        random.shuffle(fresh)
+        random.shuffle(fresh)  # ties broken at random; least-used first spreads wear across the pool
+        fresh.sort(key=lambda p: self.uses.get(p, 0))
         for path in fresh:  # cached plates are re-validated: the pool may hold pre-fix plates
             raw = self.storage.download(path)
             if raw is None:

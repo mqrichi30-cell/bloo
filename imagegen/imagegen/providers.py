@@ -9,10 +9,17 @@ Order and quotas follow docs/IMAGE_PROVIDERS.md (verified 2026-09-23):
   6. Gemini image                                        PAID ONLY -> used only if GEMINI_ALLOW_PAID=1
 All FLUX.1-schnell weights are Apache-2.0. FLUX Kontext-dev is NOT used (non-commercial).
 
-Quota state is a plain dict persisted by the caller (Storage state/providers.json):
-  {provider: {"exhausted_until": ts, "suspect_until": ts, "watermark_hits": n, "window_start": ts,
-              "day": "YYYY-MM-DD", "day_count": n, "last_call": ts}}
-"suspect_until" is set when a plate from that provider carried text/a watermark (see platecheck.py).
+Quota state is a plain dict persisted by the caller (Storage state/providers.json), SHARED by every
+host that runs the worker (GitHub runner + Cris's PC):
+  {key: {"exhausted_until": ts, "window_start": ts, "day": "YYYY-MM-DD", "day_count": n, "last_call": ts,
+         "zgpu_hits": n},
+   name: {"suspect_until": ts, "watermark_hits": n}}
+Quota fields live under `key`: the provider name for token-scoped quotas (the token's quota is the same
+from any host), or "name@host" for IP-scoped anonymous quotas (hfspace without HF_TOKEN), so one
+host's exhaustion never blocks another host with a different IP. Host = RUNNER_KIND env (github|local),
+else "github" under GitHub Actions, else the hostname.
+"suspect_until" (plate carried text/a watermark, see platecheck.py) is about the model's output, so it
+is always global under `name`.
 """
 from __future__ import annotations
 
@@ -21,6 +28,7 @@ import io
 import json
 import random
 import re
+import socket
 import time
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -32,6 +40,13 @@ from PIL import Image
 from .util import env, log, next_pacific_midnight, next_utc_midnight, now_ts, parse_retry_after
 
 TIMEOUT = 120
+
+
+def host_id() -> str:
+    """Identity for IP-scoped quotas. Stable per machine; never contains secrets."""
+    kind = env("RUNNER_KIND") or ("github" if env("GITHUB_ACTIONS") == "true" else None)
+    raw = kind or socket.gethostname() or "local"
+    return re.sub(r"[^a-z0-9_.-]", "-", raw.lower())[:40]
 
 
 class QuotaExhausted(Exception):
@@ -62,17 +77,23 @@ class Provider:
     daily_cap: int | None = None  # self-imposed images per UTC day
 
     def __init__(self, state: dict[str, Any]) -> None:
-        self.state = state.setdefault(self.name, {})
+        self.key = f"{self.name}@{host_id()}" if self.host_scoped() else self.name
+        self.state = state.setdefault(self.key, {})  # quota / pacing (per host if IP-scoped)
+        self.gstate = state.setdefault(self.name, {})  # output-quality flags (always global)
 
     # --- credentials / availability -------------------------------------------------
     def configured(self) -> bool:
         raise NotImplementedError
 
+    def host_scoped(self) -> bool:
+        """True when the quota is tied to the caller's IP (anonymous access), not to a token."""
+        return False
+
     def exhausted_until(self) -> float:
         return float(self.state.get("exhausted_until", 0))
 
     def suspect_until(self) -> float:
-        return float(self.state.get("suspect_until", 0))
+        return float(self.gstate.get("suspect_until", 0))
 
     def available(self) -> bool:
         return (self.configured() and self.exhausted_until() <= now_ts()
@@ -80,15 +101,15 @@ class Provider:
 
     def mark_suspicious(self, why: str) -> None:
         """Plate carried text/logo: bench the provider, 24 h per hit (capped at 7 days)."""
-        hits = int(self.state.get("watermark_hits", 0)) + 1
-        self.state["watermark_hits"] = hits
-        self.state["suspect_until"] = now_ts() + min(7, hits) * 86400
+        hits = int(self.gstate.get("watermark_hits", 0)) + 1
+        self.gstate["watermark_hits"] = hits
+        self.gstate["suspect_until"] = now_ts() + min(7, hits) * 86400
         log.warning("provider %s marked suspicious (%s), hit #%d, benched %d day(s)", self.name, why, hits,
                     min(7, hits))
 
     def mark_exhausted(self, reset_at: float, why: str) -> None:
         self.state["exhausted_until"] = reset_at
-        log.warning("provider %s exhausted (%s) until %s", self.name, why,
+        log.warning("provider %s exhausted (%s) until %s", self.key, why,
                     datetime.fromtimestamp(reset_at, timezone.utc).isoformat(timespec="minutes"))
 
     def default_reset(self) -> float:
@@ -176,6 +197,9 @@ class CloudflareFlux(Provider):
 
 
 _HMS = re.compile(r"(\d+):(\d{1,2}):(\d{2})")
+_ZGPU = re.compile(r"(\d+(?:\.\d+)?)\s*s\s+requested\s+vs\.?\s+(\d+(?:\.\d+)?)\s*s\s+left", re.I)
+ZGPU_MIN_WAIT = 30 * 60  # "requested > left": never retry sooner (it refills slowly, says "0:00:00")
+ZGPU_MAX_WAIT = 6 * 3600
 
 
 class HFSpaceFlux(Provider):
@@ -191,22 +215,46 @@ class HFSpaceFlux(Provider):
     def configured(self) -> bool:
         return env("HF_SPACE_DISABLED") != "1"
 
+    def host_scoped(self) -> bool:
+        return not env("HF_TOKEN")  # anonymous ZeroGPU quota is per IP; with a token it is per account
+
     @staticmethod
-    def quota_reset_from_text(msg: str) -> float | None:
+    def quota_reset_from_text(msg: str, hits: int = 0) -> float | None:
+        """Reset time for a ZeroGPU quota message, or None if `msg` is not a quota error.
+
+        "90s requested vs. 0s left. Try again in 0:00:00": the counter is below one call, so the
+        "Try again" time is meaningless; wait max(try-again, 30 min), doubling on consecutive hits
+        (`hits` = earlier hits without a success in between), capped at 6 h.
+        """
         low = msg.lower()
         if "quota" not in low and "exceeded" not in low:
             return None
         m = _HMS.search(msg)
-        wait = 3600.0  # quota message without a time: back off 1 h
-        if m:
-            h, mi, se = (int(x) for x in m.groups())
-            # ZeroGPU refills gradually and often says "Try again in 0:00:00" with 0 s left:
-            # never retry sooner than 20 min or we just burn calls on the same error
-            wait = max(h * 3600 + mi * 60 + se + 30, 20 * 60)
+        try_again = float(int(m[1]) * 3600 + int(m[2]) * 60 + int(m[3]) + 30) if m else None
+        z = _ZGPU.search(msg)
+        if z and float(z[1]) > float(z[2]):
+            floor = min(ZGPU_MIN_WAIT * 2 ** max(0, min(hits, 4)), ZGPU_MAX_WAIT)
+            wait = max(try_again or 0.0, floor)
+        elif try_again is not None:
+            wait = max(try_again, 20 * 60)
+        else:
+            wait = 3600.0  # quota message without a time: back off 1 h
         return now_ts() + wait
 
     def quota_reset(self, r: requests.Response) -> float:
-        return self.quota_reset_from_text(r.text) or now_ts() + 15 * 60
+        return self.quota_reset_from_text(r.text, self._hits()) or now_ts() + 15 * 60
+
+    def _hits(self) -> int:
+        return int(self.state.get("zgpu_hits", 0))
+
+    def mark_exhausted(self, reset_at: float, why: str) -> None:
+        self.state["zgpu_hits"] = self._hits() + 1
+        super().mark_exhausted(reset_at, why)
+
+    def generate(self, prompt: str, seed: int) -> Image.Image:
+        img = super().generate(prompt, seed)
+        self.state.pop("zgpu_hits", None)
+        return img
 
     def _base(self) -> str:
         return (env("HF_SPACE_URL", "https://black-forest-labs-flux-1-schnell.hf.space") or "").rstrip("/")
@@ -249,7 +297,7 @@ class HFSpaceFlux(Provider):
         out = done.get("output") or {}
         if not done.get("success"):
             text = f"{done.get('title') or ''}: {out.get('error') or ''}"
-            reset = self.quota_reset_from_text(text)
+            reset = self.quota_reset_from_text(text, self._hits())
             if reset is not None:
                 raise QuotaExhausted(reset, f"ZeroGPU {text[:200]}")
             raise ProviderError(f"hfspace failed: {text[:300]}")

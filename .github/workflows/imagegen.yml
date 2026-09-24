@@ -71,6 +71,7 @@ jobs:
         working-directory: imagegen
         env:
           U2NET_HOME: ~/.u2net
+          RUNNER_KIND: github # anonymous (per-IP) quota state is kept apart from the PC's
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
