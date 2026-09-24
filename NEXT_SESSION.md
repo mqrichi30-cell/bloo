@@ -20,16 +20,18 @@ Disparadores: `bloo-marketplace-tras-reset` (único, se re-arma solo a resetsAt+
 - [ ] Imágenes: 1ra corrida real salió con marca de agua Pollinations (anónimo ignora nologo) y producto flotando → rechazada y re-encolada. python-imaging-engineer corrigiendo: Pollinations solo con token, detector de marca de agua, chequeo de lino, colocación sobre superficie, proveedor sin llave HF ZeroGPU FLUX.1-schnell.
 
 ## Siguiente paso exacto (en orden)
-1. Verificar que el fix del worker quedó (imagegen/imagegen/providers.py: pollinations configured() exige POLLINATIONS_TOKEN; existe proveedor HF Space). Correr `--dry-run` y MIRAR la salida en imagegen/out/. Si no quedó, relanzar agente `python-imaging-engineer` con esa tarea.
-2. Correr 1 job real local (env: CRON_SECRET de C:\bloo\.env; SUPABASE_SERVICE_KEY = SUPABASE_SERVICE_ROLE_KEY de "C:\AI-Brain\03_Projects\BlackHawk Security Services\.env.local"; BLOO_URL prod) con `imagegen\.venv\Scripts\python.exe -m imagegen.run --max-jobs 1`. Bajar la imagen del bucket y MIRARLA. Si falla calidad: rechazar en DB (GeneratedImage.estado='rechazada', listing→esperando_imagenes, crear fila pendiente nueva) y volver a 1.
-3. Si pasa: crear tarea de Windows `bloo-imagegen` cada hora que corra `C:\bloo\imagegen\run_once.bat` (una corrida, sale) con secretos en imagegen\.env.local (gitignored).
+1. [x] Fix worker verificado (dry-run con plate real HF: lino + producto apoyado + sin marca). Commits locales 2cd5608 + .gitattributes.
+2. [x] Tarea de Windows `bloo-imagegen` cada hora → `C:\bloo\imagegen\run_once.bat` (secretos en imagegen\.env.local). Log: `C:\bloo\imagegen\logs\run.log`.
+3. (2026-09-24 00:20) 1ra corrida de la tarea Windows OK: cuota HF anónima agotada (la gastaron las pruebas), retiró el plate con marca de agua de Pollinations, job re-encolado. Cuello de botella = cuota HF anónima → HF_TOKEN de Cris lo destraba.
+   REVISAR CALIDAD EN PRODUCCIÓN: leer imagegen/logs/worker.log; listar `models/` en bucket bloo-marketing (Storage REST con service key), bajar 2-3 imágenes nuevas y MIRARLAS. Mala → rechazar en DB (GeneratedImage.estado='rechazada', listing→esperando_imagenes, fila pendiente nueva) y relanzar python-imaging-engineer. Cuota HF anónima ≈2 fondos por ventana; los fondos se reusan ≤5 veces → avance lento pero continuo. Contar progreso: SELECT estado, count(*) FROM bloo."GeneratedImage" GROUP BY 1.
+3b. Actualizar docs/IMAGE_PROVIDERS.md con la cadena real (HF Space sin llave → Together/Cloudflare/HF token si hay llaves → Pollinations solo con token).
 4. Cuando Cris haga `gh auth login`: commit parches + push; `gh secret set` CRON_SECRET, SUPABASE_URL, SUPABASE_SERVICE_KEY (+ llaves que dé); `gh workflow run imagegen.yml`; luego desactivar tarea Windows.
 5. Revisar pestaña Market en el navegador (login admin) y que listings pasen a listo_para_publicar.
 6. Cerrar: actualizar este archivo + memoria bloo-marketplace-imagegen.
 
 ## Pendiente de Cris (arrastrar al final de cada mensaje)
 1. `gh auth login -h github.com` (token vencido).
-2. Llave gratis de imágenes: Cloudflare (Account ID + API Token Workers AI) o token de auth.pollinations.ai.
+2. Token gratis de Hugging Face (huggingface.co → Settings → Access Tokens, tipo Read) → acelera fondos; o llave Cloudflare Workers AI; o token auth.pollinations.ai. Se ponen en C:\bloo\imagegen\.env.local (HF_TOKEN=..., CF_ACCOUNT_ID=..., CF_API_TOKEN=..., POLLINATIONS_TOKEN=...).
 3. Llave Anthropic + Página "bloo" + app Meta (docs/META_SETUP.md) — solo para auto-reply IA.
 4. Conteo físico "Lentes bloo" (posible +1 u por reserva 13-ago).
 5. Confirmar si Uvita es marco de acetato.
