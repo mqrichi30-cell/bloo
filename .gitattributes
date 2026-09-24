@@ -11,3 +11,4 @@
 *.woff binary
 *.woff2 binary
 *.db binary
+*.bat text eol=crlf
