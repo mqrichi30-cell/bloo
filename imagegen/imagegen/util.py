@@ -6,18 +6,19 @@ import logging
 import os
 import sys
 from datetime import datetime, timedelta, timezone
+from typing import TextIO
 
 log = logging.getLogger("imagegen")
 
 VARIANTS = ("hero", "flatlay", "detail")
 
 
-def setup_logging(verbose: bool = False) -> None:
+def setup_logging(verbose: bool = False, stream: TextIO | None = None) -> None:
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",
         datefmt="%H:%M:%S",
-        stream=sys.stdout,
+        stream=stream or sys.stdout,
     )
 
 

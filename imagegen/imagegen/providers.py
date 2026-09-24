@@ -3,19 +3,24 @@
 Order and quotas follow docs/IMAGE_PROVIDERS.md (verified 2026-09-23):
   1. Together  black-forest-labs/FLUX.1-schnell-Free   free/unlimited, pace 2-3 s
   2. Cloudflare Workers AI @cf/black-forest-labs/flux-1-schnell  10k neurons/day (~150 img self-cap), reset 00:00 UTC
-  3. Pollinations flux (nologo)                          best effort, pace ~5 s
-  4. Hugging Face FLUX.1-schnell                         $0.10/month credits (~33 img), last resort
-  5. Gemini image                                        PAID ONLY -> used only if GEMINI_ALLOW_PAID=1
+  3. HF ZeroGPU Space black-forest-labs/FLUX.1-schnell   KEYLESS (anonymous ZeroGPU quota; HF_TOKEN optional)
+  4. Pollinations flux                                   ONLY with POLLINATIONS_TOKEN (anonymous = watermark)
+  5. Hugging Face FLUX.1-schnell (inference router)      $0.10/month credits (~33 img), last resort
+  6. Gemini image                                        PAID ONLY -> used only if GEMINI_ALLOW_PAID=1
 All FLUX.1-schnell weights are Apache-2.0. FLUX Kontext-dev is NOT used (non-commercial).
 
 Quota state is a plain dict persisted by the caller (Storage state/providers.json):
-  {provider: {"exhausted_until": ts, "window_start": ts, "day": "YYYY-MM-DD", "day_count": n, "last_call": ts}}
+  {provider: {"exhausted_until": ts, "suspect_until": ts, "watermark_hits": n, "window_start": ts,
+              "day": "YYYY-MM-DD", "day_count": n, "last_call": ts}}
+"suspect_until" is set when a plate from that provider carried text/a watermark (see platecheck.py).
 """
 from __future__ import annotations
 
 import base64
 import io
+import json
 import random
+import re
 import time
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -66,8 +71,20 @@ class Provider:
     def exhausted_until(self) -> float:
         return float(self.state.get("exhausted_until", 0))
 
+    def suspect_until(self) -> float:
+        return float(self.state.get("suspect_until", 0))
+
     def available(self) -> bool:
-        return self.configured() and self.exhausted_until() <= now_ts()
+        return (self.configured() and self.exhausted_until() <= now_ts()
+                and self.suspect_until() <= now_ts())
+
+    def mark_suspicious(self, why: str) -> None:
+        """Plate carried text/logo: bench the provider, 24 h per hit (capped at 7 days)."""
+        hits = int(self.state.get("watermark_hits", 0)) + 1
+        self.state["watermark_hits"] = hits
+        self.state["suspect_until"] = now_ts() + min(7, hits) * 86400
+        log.warning("provider %s marked suspicious (%s), hit #%d, benched %d day(s)", self.name, why, hits,
+                    min(7, hits))
 
     def mark_exhausted(self, reset_at: float, why: str) -> None:
         self.state["exhausted_until"] = reset_at
@@ -158,20 +175,104 @@ class CloudflareFlux(Provider):
         return _decode_image(base64.b64decode(r.json()["result"]["image"]))
 
 
+_HMS = re.compile(r"(\d+):(\d{1,2}):(\d{2})")
+
+
+class HFSpaceFlux(Provider):
+    """Keyless: the official FLUX.1-schnell ZeroGPU Space (Apache-2.0 weights, no watermark).
+
+    Anonymous calls draw on a small per-IP ZeroGPU quota; HF_TOKEN (optional) uses the account's
+    quota instead. Quota errors read like "You have exceeded your GPU quota (..). Try again in 0:12:34".
+    """
+    name = "hfspace"
+    min_interval = 5.0
+    daily_cap = int(env("HF_SPACE_DAILY_CAP", "80") or 80)
+
+    def configured(self) -> bool:
+        return env("HF_SPACE_DISABLED") != "1"
+
+    @staticmethod
+    def quota_reset_from_text(msg: str) -> float | None:
+        low = msg.lower()
+        if "quota" not in low and "exceeded" not in low:
+            return None
+        m = _HMS.search(msg)
+        wait = 3600.0  # quota message without a time: back off 1 h
+        if m:
+            h, mi, se = (int(x) for x in m.groups())
+            # ZeroGPU refills gradually and often says "Try again in 0:00:00" with 0 s left:
+            # never retry sooner than 20 min or we just burn calls on the same error
+            wait = max(h * 3600 + mi * 60 + se + 30, 20 * 60)
+        return now_ts() + wait
+
+    def quota_reset(self, r: requests.Response) -> float:
+        return self.quota_reset_from_text(r.text) or now_ts() + 15 * 60
+
+    def _base(self) -> str:
+        return (env("HF_SPACE_URL", "https://black-forest-labs-flux-1-schnell.hf.space") or "").rstrip("/")
+
+    def _headers(self) -> dict[str, str]:
+        tok = env("HF_TOKEN")
+        return {"Authorization": f"Bearer {tok}"} if tok else {}
+
+    def _fn_index(self, base: str, headers: dict[str, str]) -> int:
+        if "fn_index" not in self.__dict__:
+            r = requests.get(f"{base}/config", headers=headers, timeout=60)
+            self._check(r)
+            deps = r.json().get("dependencies", [])
+            self.fn_index = next((d.get("id", i) for i, d in enumerate(deps) if d.get("api_name") == "infer"), 2)
+        return self.fn_index
+
+    def _generate(self, prompt: str, seed: int) -> Image.Image:
+        # Gradio queue protocol (not /call/): it returns the real error text, which we need to
+        # tell a ZeroGPU quota error from a transient failure.
+        base, headers = self._base(), self._headers()
+        session = f"{random.getrandbits(48):012x}"
+        r = requests.post(f"{base}/gradio_api/queue/join", headers=headers, timeout=60, json={
+            "data": [prompt, seed, False, 1024, 1024, 4], "fn_index": self._fn_index(base, headers),
+            "session_hash": session, "event_data": None, "trigger_id": None})
+        self._check(r)
+        r = requests.get(f"{base}/gradio_api/queue/data", params={"session_hash": session},
+                         headers=headers, timeout=TIMEOUT * 2)
+        self._check(r)
+        done: dict[str, Any] | None = None
+        for line in r.text.splitlines():
+            if line.startswith("data:"):
+                try:
+                    msg = json.loads(line[5:])
+                except ValueError:
+                    continue
+                if msg.get("msg") == "process_completed":
+                    done = msg
+        if done is None:
+            raise ProviderError("hfspace: stream ended without a result")
+        out = done.get("output") or {}
+        if not done.get("success"):
+            text = f"{done.get('title') or ''}: {out.get('error') or ''}"
+            reset = self.quota_reset_from_text(text)
+            if reset is not None:
+                raise QuotaExhausted(reset, f"ZeroGPU {text[:200]}")
+            raise ProviderError(f"hfspace failed: {text[:300]}")
+        file = out["data"][0]
+        url = file.get("url") or f"{base}/gradio_api/file={file['path']}"
+        img = requests.get(url, headers=headers, timeout=TIMEOUT)
+        self._check(img)
+        return _decode_image(img.content)
+
+
 class PollinationsFlux(Provider):
     name = "pollinations"
     min_interval = 5.0
 
     def configured(self) -> bool:
-        return env("POLLINATIONS_DISABLED") != "1"  # token optional; anonymous works with throttling
+        # never anonymous: anonymous Pollinations ignores nologo and stamps a visible watermark
+        return bool(env("POLLINATIONS_TOKEN")) and env("POLLINATIONS_DISABLED") != "1"
 
     def quota_reset(self, r: requests.Response) -> float:
         return next_utc_midnight() if r.status_code == 402 else now_ts() + 15 * 60
 
     def _generate(self, prompt: str, seed: int) -> Image.Image:
-        headers = {}
-        if env("POLLINATIONS_TOKEN"):
-            headers["Authorization"] = f"Bearer {env('POLLINATIONS_TOKEN')}"
+        headers = {"Authorization": f"Bearer {env('POLLINATIONS_TOKEN')}"}
         url = f"https://image.pollinations.ai/prompt/{quote(prompt, safe='')}"
         r = requests.get(url, headers=headers, timeout=TIMEOUT, params={
             "model": "flux", "width": 1024, "height": 1024, "nologo": "true", "private": "true",
@@ -247,7 +348,7 @@ class GeminiImage(Provider):
 
 
 PROVIDER_CLASSES: list[Callable[[dict[str, Any]], Provider]] = [
-    TogetherFlux, CloudflareFlux, PollinationsFlux, HuggingFaceFlux, GeminiImage,
+    TogetherFlux, CloudflareFlux, HFSpaceFlux, PollinationsFlux, HuggingFaceFlux, GeminiImage,
 ]
 
 
@@ -260,8 +361,16 @@ class ProviderChain:
     def any_available(self) -> bool:
         return any(p.available() and self.failures.get(p.name, 0) < 3 for p in self.providers)
 
+    def by_name(self, name: str) -> Provider | None:
+        return next((p for p in self.providers if p.name == name), None)
+
+    def mark_suspicious(self, name: str, why: str) -> None:
+        p = self.by_name(name)
+        if p is not None:
+            p.mark_suspicious(why)
+
     def earliest_reset(self) -> float:
-        resets = [p.exhausted_until() for p in self.providers if p.configured()]
+        resets = [max(p.exhausted_until(), p.suspect_until()) for p in self.providers if p.configured()]
         soonest = min(resets) if resets else 0.0
         # a provider that is merely failing (not exhausted) has reset 0 -> retry in 1 h
         return soonest if soonest > now_ts() else now_ts() + 3600

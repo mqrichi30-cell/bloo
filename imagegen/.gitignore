@@ -6,3 +6,4 @@ out/
 .u2net/
 .rembg/
 .env.local
+logs/

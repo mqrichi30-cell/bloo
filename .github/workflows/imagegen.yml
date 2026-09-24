@@ -35,7 +35,7 @@ jobs:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
           body=$(curl -fsS --max-time 30 -H "x-cron-secret: ${CRON_SECRET}" "${BLOO_URL}/api/imagegen/pending-count")
-          count=$(printf '%s' "$body" | jq -r '.count // 0')
+          count=$(printf '%s' "$body" | jq -r '.pending // .count // 0')
           echo "pending jobs: ${count}"
           echo "count=${count}" >> "$GITHUB_OUTPUT"
 
@@ -82,6 +82,7 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_ALLOW_PAID: ${{ vars.GEMINI_ALLOW_PAID }}
           IMAGEGEN_REMBG_MODEL: ${{ vars.IMAGEGEN_REMBG_MODEL }}
+          HF_SPACE_DISABLED: ${{ vars.HF_SPACE_DISABLED }}
           MAX_JOBS: ${{ github.event.inputs.max_jobs || '12' }}
           MAX_MINUTES: ${{ github.event.inputs.max_minutes || '20' }}
-        run: python -m imagegen.run --max-jobs "$MAX_JOBS" --max-minutes "$MAX_MINUTES"
+        run: python -m imagegen.run --once --max-jobs "$MAX_JOBS" --max-minutes "$MAX_MINUTES"

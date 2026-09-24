@@ -7,54 +7,80 @@ import random
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
 
+from .composite import fits
+from .platecheck import PlateRejected, PlateReport, check_plate
 from .providers import ProviderChain, QuotaExhausted
 from .storage import Storage
 from .util import compact_ts, log
 
 MAX_USES = 5  # each plate is reused at most this many times
 MIN_POOL = 4  # generate a fresh plate when fewer plates with remaining uses exist
+GEN_TRIES = 3  # provider calls per plate request (rejected plates count toward quota)
 PLATE_STATE = "state/plates.json"
 
+# FLUX-schnell has no negative prompt and tends to *draw* whatever is named ("no text" -> text,
+# "no sunglasses" -> sunglasses), so prompts describe only what must be there.
 _COMMON = (
-    "Photorealistic product-photography background plate, scene only. Natural beige linen fabric "
-    "with fine visible weave. Minimalist Costa Rican coastal old-money interior mood, soft natural "
-    "daylight, gentle shadows, muted palette of sand, cream, deep navy and dusty blue. Shallow depth "
-    "of field. The central area is EMPTY bare linen, reserved for a product added later. "
-    "No people, no hands, no text, no logo, no watermark, no sunglasses, no eyewear, no objects in "
-    "the center, no sand, no seashells, no straw hat, no wood, no marble."
+    "Photorealistic editorial product-photography background, scene only, clean and unbranded. "
+    "Natural undyed beige linen with a fine, clearly visible weave and soft gentle folds. Warm soft "
+    "natural daylight, delicate soft shadows. Muted palette of sand, oatmeal and cream, with small "
+    "accents of deep navy and dusty blue. Quiet coastal old-money mood. The middle of the linen is "
+    "empty and smooth, ready for a product to be placed later."
 )
 
 PROMPTS: dict[str, str] = {
     "hero": (
-        "Camera at a 3/4 elevated angle, about 35 degrees above a table covered in beige linen. "
-        "Clear empty linen in the lower center of the frame. A softly folded navy blue linen napkin "
-        "far out of focus in the upper background. One monstera leaf heavily blurred at the right "
-        "frame edge. Window light from the left. " + _COMMON
+        "Low table-top view: camera just above a table, looking across it at a 3/4 angle about 20 degrees "
+        "down. A natural beige linen tablecloth covers the table and fills the entire lower two thirds of "
+        "the frame, from the bottom edge up past the middle, fine weave sharp in the foreground. "
+        "The camera is close, so the near edge of the table is outside the frame: the flat tabletop "
+        "runs straight off the bottom of the image. "
+        "Beyond the far edge of the table, only a creamy, heavily blurred warm beige background. "
+        "A folded navy linen napkin, very blurred, at the far top-left corner; one monstera leaf, very "
+        "blurred, entering from the top-right edge. " + _COMMON
     ),
     "flatlay": (
-        "Shot directly overhead, top-down flat lay. Beige linen fills the frame, large empty center. "
-        "A small navy ceramic dish partially visible and out of focus in the top-left corner. One "
-        "palm leaf softly blurred entering from the bottom-right edge. Even soft daylight. " + _COMMON
+        "Strict overhead top-down flat lay, camera pointing straight down at a tabletop. A natural beige "
+        "linen tablecloth fills 100 percent of the frame edge to edge, fine weave visible everywhere, a "
+        "few soft gentle folds, nothing placed on it. Only a soft blurred palm-leaf shadow and a thin "
+        "navy linen hem touch the extreme corners. " + _COMMON
     ),
     "detail": (
-        "Macro close-up of beige linen texture, camera low and near, very shallow focus. A soft "
-        "dusty-blue shadow falls diagonally across the linen behind the empty center. One tropical "
-        "leaf blurred into bokeh in the upper background. Soft natural light. " + _COMMON
+        "Close macro photograph of a natural beige linen tablecloth, camera low and near the fabric. "
+        "The linen fills the whole lower two thirds of the frame with a crisp fine weave and soft folds, "
+        "falling off into creamy beige blur toward the top. A faint dusty-blue shadow crosses the upper "
+        "background; a tropical leaf melts into soft bokeh at the very top edge. " + _COMMON
     ),
 }
 
 
-def plate_is_clean(img: Image.Image) -> bool:
-    """Reject plates that put a busy object in the product spot (centre must be low-detail)."""
+def plate_is_clean(img: Image.Image, variant: str = "hero") -> bool:
+    """Reject plates that put a busy object where the product goes (that spot must be low-detail)."""
     g = np.asarray(img.convert("L").resize((256, 256)), np.float32)
-    c = g[80:200, 64:192]
+    # hero/detail: product rests in the lower middle; flatlay: centre
+    c = g[80:200, 64:192] if variant == "flatlay" else g[120:205, 64:192]
     gy, gx = np.gradient(c)
     energy = float(np.hypot(gx, gy).mean())
     lum = float(c.mean())
     ok = energy < 9.0 and 70 < lum < 240
     if not ok:
-        log.info("plate rejected: centre energy %.1f lum %.0f", energy, lum)
+        log.info("plate rejected: product spot energy %.1f lum %.0f", energy, lum)
     return ok
+
+
+def validate_plate(img: Image.Image, variant: str) -> PlateReport:
+    """All local gates a plate must pass before a product is placed on it (logs the reason)."""
+    rep = check_plate(img, variant)
+    if rep.ok and not plate_is_clean(img, variant):
+        rep = PlateReport(False, "busy object where the product goes", stats=rep.stats)
+    if rep.ok:
+        why = fits(img, variant)
+        if why:
+            rep = PlateReport(False, why, stats=rep.stats)
+    if not rep.ok:
+        log.info("plate %s rejected: %s | %s", variant, rep.reason,
+                 {k: v for k, v in rep.stats.items() if k != "wm"})
+    return rep
 
 
 class PlatePool:
@@ -73,12 +99,20 @@ class PlatePool:
     def _fresh(self, variant: str) -> list[str]:
         return [p for p in self._plates(variant) if self.uses.get(p, 0) < MAX_USES]
 
-    def _generate(self, variant: str) -> str:
+    def retire(self, path: str, why: str) -> None:
+        log.info("retiring plate %s (%s)", path, why)
+        self.uses[path] = MAX_USES
+
+    def _generate(self, variant: str) -> tuple[str, Image.Image]:
+        """Up to GEN_TRIES provider calls; every rejected plate still counts toward that provider's quota."""
         last: Exception | None = None
-        for _ in range(3):
+        for _ in range(GEN_TRIES):
             img, provider = self.chain.generate(PROMPTS[variant])
-            if not plate_is_clean(img):
-                last = RuntimeError("plate centre too busy")
+            rep = validate_plate(img, variant)
+            if not rep.ok:
+                if rep.watermark:
+                    self.chain.mark_suspicious(provider, rep.reason)
+                last = PlateRejected(f"{provider}: {rep.reason}", rep.watermark)
                 continue
             buf = io.BytesIO()
             img.save(buf, "JPEG", quality=92)
@@ -86,16 +120,17 @@ class PlatePool:
             self.storage.upload(path, buf.getvalue(), "image/jpeg")
             self._plates(variant).append(path)
             self.uses[path] = 0
-            return path
+            return path, img
         raise last or RuntimeError("plate generation failed")
 
     def acquire(self, variant: str) -> tuple[Image.Image, str]:
-        """Return (plate image, storage path). Raises QuotaExhausted only when nothing is reusable."""
+        """Return a validated (plate image, storage path). Raises QuotaExhausted only when nothing is usable."""
         fresh = self._fresh(variant)
-        path: str | None = None
         if len(fresh) < MIN_POOL:
             try:
-                path = self._generate(variant)
+                path, img = self._generate(variant)
+                self.uses[path] = 1
+                return img, path
             except QuotaExhausted:
                 if not fresh:
                     raise
@@ -104,13 +139,23 @@ class PlatePool:
                 if not fresh:
                     raise
                 log.warning("plate generation failed (%s); reusing cache", e)
-        if path is None:
-            path = random.choice(fresh)
-        raw = self.storage.download(path)
-        if raw is None:
-            raise RuntimeError(f"plate {path} vanished")
-        self.uses[path] = self.uses.get(path, 0) + 1
-        return Image.open(io.BytesIO(raw)).convert("RGB"), path
+        random.shuffle(fresh)
+        for path in fresh:  # cached plates are re-validated: the pool may hold pre-fix plates
+            raw = self.storage.download(path)
+            if raw is None:
+                self.retire(path, "vanished")
+                continue
+            img = Image.open(io.BytesIO(raw)).convert("RGB")
+            rep = validate_plate(img, variant)
+            if not rep.ok:
+                self.retire(path, rep.reason)
+                continue
+            self.uses[path] = self.uses.get(path, 0) + 1
+            return img, path
+        # every cached plate failed: one last generation attempt (quota errors propagate)
+        path, img = self._generate(variant)
+        self.uses[path] = 1
+        return img, path
 
     def save(self) -> None:
         self.storage.write_json(PLATE_STATE, self.uses)

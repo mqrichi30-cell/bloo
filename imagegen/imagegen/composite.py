@@ -1,4 +1,11 @@
-"""Photoreal composite of the real product cutout over a generated plate."""
+"""Photoreal composite of the real product cutout over a generated plate.
+
+Placement is surface-aware: the beige-linen region of the plate is detected (platecheck.linen_mask)
+and the product's bottom edge is anchored inside it, so the frame rests ON the linen. Shadows are
+a tight dark contact line along the points that would touch the table (lower convex hull of the
+silhouette) plus a soft, wider cast shadow. If there is no linen where the product must sit, the
+plate is rejected (PlateRejected) and the caller picks/generates another one.
+"""
 from __future__ import annotations
 
 import io
@@ -7,29 +14,29 @@ from dataclasses import dataclass
 import numpy as np
 from PIL import Image, ImageFilter, ImageOps
 
+from .platecheck import PlateRejected, linen_mask, surface_edges
+
 OUTPUT_SIZES = {"1x1": (1080, 1080), "4x5": (1080, 1350)}
+MIN_SURFACE = 0.85  # fraction of the product footprint that must be linen
 
 
 @dataclass(frozen=True)
 class Layout:
-    width_frac: float   # product width as fraction of canvas width
-    max_h_frac: float   # clamp product height to this fraction of canvas height
-    cx: float           # product centre (fractions of canvas)
-    cy: float
-    angle: float        # in-plane rotation, degrees (no perspective warp: shape stays identical)
-    shadow_dx: float    # cast-shadow offset (fraction of W / H)
-    shadow_dy: float
-    shadow_blur: float  # fraction of W
-    shadow_op: float
+    width_frac: float              # product width as fraction of canvas width
+    max_h_frac: float              # clamp product height to this fraction of canvas height
+    cx: float                      # preferred horizontal centre (fraction of W)
+    bottom: tuple[float, float]    # allowed band for the product's bottom edge (fractions of H)
+    angle: float                   # in-plane rotation, degrees (shape stays identical)
+    top_down: bool                 # overhead camera: shadow is an offset silhouette, not a contact line
 
 
 LAYOUTS: dict[str, Layout] = {
-    # 3/4 hero: lower-centre, slight tilt, longer shadow away from window light (left)
-    "hero": Layout(0.60, 0.46, 0.50, 0.63, -5.0, 0.010, 0.020, 0.022, 0.40),
-    # overhead flat lay: centred, short symmetric shadow
-    "flatlay": Layout(0.64, 0.50, 0.50, 0.52, 0.0, 0.004, 0.008, 0.016, 0.34),
-    # close detail: larger crop, product fills the frame
-    "detail": Layout(0.90, 0.62, 0.52, 0.56, 7.0, 0.008, 0.014, 0.020, 0.42),
+    # 3/4 table-top: product rests on the linen in the lower part of the frame
+    "hero": Layout(0.60, 0.42, 0.50, (0.72, 0.78), 0.0, False),
+    # strict overhead flat lay: centred on linen that fills the frame
+    "flatlay": Layout(0.62, 0.50, 0.50, (0.58, 0.68), 0.0, True),
+    # close detail on linen: product large, bottom edge low in frame
+    "detail": Layout(0.84, 0.52, 0.50, (0.78, 0.84), 0.0, False),
 }
 
 
@@ -37,18 +44,52 @@ def cover(img: Image.Image, size: tuple[int, int]) -> Image.Image:
     return ImageOps.fit(img, size, Image.LANCZOS, centering=(0.5, 0.5))
 
 
-def _place(cut: Image.Image, lay: Layout, W: int, H: int) -> tuple[Image.Image, int, int]:
+def _scale(cut: Image.Image, lay: Layout, W: int, H: int) -> Image.Image:
     if lay.angle:
         cut = cut.rotate(lay.angle, Image.BICUBIC, expand=True)
-    tw = lay.width_frac * W
-    scale = min(tw / cut.width, lay.max_h_frac * H / cut.height)
-    nw, nh = max(1, round(cut.width * scale)), max(1, round(cut.height * scale))
-    cut = cut.resize((nw, nh), Image.LANCZOS)
-    x = round(lay.cx * W - nw / 2)
-    y = round(lay.cy * H - nh / 2)
-    x = min(max(x, round(0.03 * W)), W - nw - round(0.03 * W))
-    y = min(max(y, round(0.03 * H)), H - nh - round(0.03 * H))
-    return cut, x, y
+    scale = min(lay.width_frac * W / cut.width, lay.max_h_frac * H / cut.height)
+    return cut.resize((max(1, round(cut.width * scale)), max(1, round(cut.height * scale))), Image.LANCZOS)
+
+
+def _footprint(lay: Layout, x: int, yb: int, nw: int, nh: int, W: int, H: int) -> tuple[slice, slice]:
+    """Region that must be linen: the lower part of the product plus the shadow just below it."""
+    if lay.top_down:
+        pad = round(0.03 * W)
+        return slice(max(0, yb - nh - pad), min(H, yb + pad)), slice(max(0, x - pad), min(W, x + nw + pad))
+    return slice(max(0, yb - round(0.45 * nh)), min(H, yb + round(0.04 * H))), slice(max(0, x), min(W, x + nw))
+
+
+def place(mask: np.ndarray, nw: int, nh: int, lay: Layout,
+          edges: np.ndarray | None = None) -> tuple[int, int, float]:
+    """Pick (x, y, coverage) with the bottom edge inside the linen band and no table edge under the
+    product (it would hang over the drape or the back wall). Raises PlateRejected."""
+    H, W = mask.shape
+    edge_rows = np.round(np.asarray(edges if edges is not None else [], np.float32) * H).astype(int)
+    margin = round(0.03 * W)
+    best: tuple[float, int, int, float] | None = None
+    mid = (lay.bottom[0] + lay.bottom[1]) / 2
+    edge_skips = 0
+    for bf in np.linspace(lay.bottom[0], lay.bottom[1], 5):
+        yb = round(bf * H)
+        if yb - nh < round(0.03 * H) or yb > H - round(0.03 * H):
+            continue
+        for dx in (0.0, -0.04, 0.04, -0.08, 0.08):
+            x = round((lay.cx + dx) * W - nw / 2)
+            x = min(max(x, margin), W - nw - margin)
+            ys, xs = _footprint(lay, x, yb, nw, nh, W, H)
+            if ((edge_rows >= yb - nh) & (edge_rows < yb + round(0.04 * H))).any():
+                edge_skips += 1
+                continue  # a table edge crosses the product: it would hang over the drape/wall
+            cov = float(mask[ys, xs].mean()) if mask[ys, xs].size else 0.0
+            score = cov - 0.5 * abs(bf - mid) - 0.3 * abs(dx)
+            if best is None or score > best[0]:
+                best = (score, x, yb - nh, cov)
+    if best is None and edge_skips:
+        raise PlateRejected("table edge crosses every allowed product position (would not rest on linen)")
+    if best is None or best[3] < MIN_SURFACE:
+        cov = 0.0 if best is None else best[3]
+        raise PlateRejected(f"no linen surface where the product must rest ({cov:.0%} < {MIN_SURFACE:.0%})")
+    return best[1], best[2], best[3]
 
 
 def _color_match(cut: np.ndarray, plate_region: np.ndarray, strength: float = 0.30) -> np.ndarray:
@@ -66,40 +107,111 @@ def _color_match(cut: np.ndarray, plate_region: np.ndarray, strength: float = 0.
     return out
 
 
-def _shadow_layer(alpha: Image.Image, W: int, H: int, x: int, y: int, lay: Layout) -> np.ndarray:
-    """Return a 0..1 darkening map: soft cast shadow + tight ambient occlusion under the frame."""
-    canvas = Image.new("L", (W, H), 0)
-    # cast shadow: silhouette slightly squashed toward the surface and offset from the light
-    sq = alpha.resize((alpha.width, max(1, int(alpha.height * 0.92))), Image.BILINEAR)
-    canvas.paste(sq, (x + round(lay.shadow_dx * W), y + round(lay.shadow_dy * H) + (alpha.height - sq.height)), sq)
-    cast = np.asarray(canvas.filter(ImageFilter.GaussianBlur(lay.shadow_blur * W)), np.float32) / 255
-    # ambient occlusion: dilated, tight blur right under the product (contact points)
-    ao_c = Image.new("L", (W, H), 0)
-    dil = alpha.filter(ImageFilter.MaxFilter(5))
-    ao_c.paste(dil, (x, y + max(1, round(0.003 * H))), dil)
-    ao = np.asarray(ao_c.filter(ImageFilter.GaussianBlur(0.0045 * W)), np.float32) / 255
-    return np.clip(cast * lay.shadow_op + ao * 0.42, 0, 0.75)
+def _lower_hull(xs: np.ndarray, ys: np.ndarray) -> np.ndarray:
+    """y of the lower convex hull (image coords, y down) evaluated at every x in xs."""
+    pts: list[tuple[int, int]] = []
+    for x, y in zip(xs.tolist(), ys.tolist()):
+        # keep the chain convex from below: pop while the turn bends upward
+        while len(pts) >= 2:
+            (x1, y1), (x2, y2) = pts[-2], pts[-1]
+            if (x2 - x1) * (y - y1) - (y2 - y1) * (x - x1) >= 0:
+                pts.pop()
+            else:
+                break
+        pts.append((x, y))
+    hx = np.array([p[0] for p in pts], np.float32)
+    hy = np.array([p[1] for p in pts], np.float32)
+    return np.interp(xs, hx, hy)
+
+
+def _blur(arr: np.ndarray, radius: float) -> np.ndarray:
+    im = Image.fromarray(np.uint8(np.clip(arr, 0, 1) * 255))
+    return np.asarray(im.filter(ImageFilter.GaussianBlur(max(0.5, radius))), np.float32) / 255
+
+
+def _shadow_map(a: np.ndarray, W: int, H: int, x: int, y: int, lay: Layout) -> np.ndarray:
+    """0..1 darkening map. `a` is the product alpha (nh x nw, 0..1) placed at (x, y)."""
+    nh, nw = a.shape
+    out = np.zeros((H, W), np.float32)
+
+    def paste(dst: np.ndarray, src: np.ndarray, px: int, py: int) -> None:
+        h, w = src.shape
+        x0, y0, x1, y1 = max(0, px), max(0, py), min(W, px + w), min(H, py + h)
+        if x1 > x0 and y1 > y0:
+            dst[y0:y1, x0:x1] = np.maximum(dst[y0:y1, x0:x1], src[y0 - py:y1 - py, x0 - px:x1 - px])
+
+    solid = a > 0.5
+    if lay.top_down:
+        cast = np.zeros_like(out)
+        paste(cast, a, x + round(0.010 * W), y + round(0.014 * H))
+        ao = np.zeros_like(out)
+        paste(ao, (np.asarray(Image.fromarray(np.uint8(a * 255)).filter(ImageFilter.MaxFilter(5)),
+                              np.float32) / 255), x, y + round(0.003 * H))
+        return np.clip(_blur(cast, 0.010 * W) * 0.40 + _blur(ao, 0.004 * W) * 0.35, 0, 0.75)
+
+    # --- table-top: contact line along the lower hull + soft squashed cast shadow
+    cols = np.nonzero(solid.any(axis=0))[0]
+    if cols.size == 0:
+        return out
+    bottoms = np.array([np.nonzero(solid[:, c])[0].max() for c in cols], np.int32)
+    hull = _lower_hull(cols, bottoms)
+    gap = hull - bottoms                       # 0 where the frame would touch the table
+    weight = np.exp(-gap / max(2.0, 0.05 * nh))
+    contact = np.zeros_like(out)
+    thick = max(3, round(0.005 * H))
+    for c, b, w in zip(cols.tolist(), bottoms.tolist(), weight.tolist()):
+        gx, gy = x + c, y + b
+        if 0 <= gx < W:  # line starts just inside the silhouette and extends below it
+            contact[max(0, gy - 2):min(H, gy + thick), gx] = w
+    contact = _blur(contact, 0.003 * W)
+    contact /= max(1e-3, float(contact.max()))
+
+    # ground shadow of the raised parts (temple arms, bridge): with soft top light it lands on the
+    # table plane, i.e. along the lower hull; softer where the part is higher above the table
+    band = np.zeros_like(out)
+    blob = np.zeros_like(out)
+    bt = max(3, round(0.010 * H))
+    for c, b, hv in zip(cols.tolist(), bottoms.tolist(), hull.tolist()):
+        gx, gh = x + c, y + int(round(hv))
+        if 0 <= gx < W:
+            band[max(0, gh - 1):min(H, gh + bt), gx] = 1.0
+            blob[max(0, y + b - round(0.30 * nh)):min(H, gh + round(0.012 * H)), gx] = 1.0
+    band = _blur(band, 0.007 * W)
+    band /= max(1e-3, float(band.max()))
+    blob = _blur(blob, 0.028 * W)
+    cast = np.clip(band * 0.55 + blob * 0.45, 0, 1)
+
+    # ambient occlusion: dilated silhouette nudged down, tight blur
+    dil = np.asarray(Image.fromarray(np.uint8(a * 255)).filter(ImageFilter.MaxFilter(7)), np.float32) / 255
+    ao = np.zeros_like(out)
+    paste(ao, dil, x, y + round(0.006 * H))
+    ao = _blur(ao, 0.006 * W)
+    return np.clip(contact * 0.78 + cast * 0.42 + ao * 0.28, 0, 0.85)
 
 
 def composite(plate: Image.Image, cutout: Image.Image, variant: str, size: tuple[int, int],
               seed: int = 0) -> Image.Image:
+    """Raises PlateRejected when the plate has no linen where the product must rest."""
     W, H = size
     lay = LAYOUTS.get(variant, LAYOUTS["hero"])
-    base = np.asarray(cover(plate, size), np.float32)
+    cov_plate = cover(plate, size)
+    base = np.asarray(cov_plate, np.float32)
+    mask = linen_mask(cov_plate)
 
-    cut, x, y = _place(cutout.convert("RGBA"), lay, W, H)
+    cut = _scale(cutout.convert("RGBA"), lay, W, H)
+    x, y, _ = place(mask, cut.width, cut.height, lay, surface_edges(cov_plate))
     region = base[max(0, y - 40): y + cut.height + 40, max(0, x - 40): x + cut.width + 40]
     cut_arr = _color_match(np.asarray(cut).copy(), region)
-    alpha = Image.fromarray(cut_arr[..., 3])
+    alpha_img = Image.fromarray(cut_arr[..., 3])
+    a = cut_arr[..., 3].astype(np.float32) / 255
 
     # shadows: multiply toward a warm dark tone, not pure black
-    sh = _shadow_layer(alpha, W, H, x, y, lay)[..., None]
-    tone = np.array([70, 58, 46], np.float32)
+    sh = _shadow_map(a, W, H, x, y, lay)[..., None]
+    tone = np.array([62, 50, 40], np.float32)
     base = base * (1 - sh) + tone * sh * (base / 255)
 
     # light wrap: let a little of the blurred plate bleed onto the product's outer edge
-    a = cut_arr[..., 3].astype(np.float32) / 255
-    edge = np.clip(a - np.asarray(alpha.filter(ImageFilter.MinFilter(5)), np.float32) / 255, 0, 1)
+    edge = np.clip(a - np.asarray(alpha_img.filter(ImageFilter.MinFilter(5)), np.float32) / 255, 0, 1)
     blur_bg = np.asarray(Image.fromarray(np.uint8(base[y:y + cut.height, x:x + cut.width].clip(0, 255)))
                          .filter(ImageFilter.GaussianBlur(6)), np.float32)
     prod = cut_arr[..., :3].astype(np.float32)
@@ -113,6 +225,20 @@ def composite(plate: Image.Image, cutout: Image.Image, variant: str, size: tuple
     grain = rng.normal(0, 2.2, (H, W, 1)).astype(np.float32)
     base = np.clip(base + grain, 0, 255).astype(np.uint8)
     return Image.fromarray(base, "RGB")
+
+
+def fits(plate: Image.Image, variant: str) -> str | None:
+    """Can a typical frame (2.5:1 box) rest on this plate at every output size? None if yes, else why."""
+    lay = LAYOUTS.get(variant, LAYOUTS["hero"])
+    for W, H in OUTPUT_SIZES.values():
+        cov_plate = cover(plate, (W, H))
+        nw = round(lay.width_frac * W)
+        nh = min(round(nw / 2.5), round(lay.max_h_frac * H))
+        try:
+            place(linen_mask(cov_plate), nw, nh, lay, surface_edges(cov_plate))
+        except PlateRejected as e:
+            return f"{W}x{H}: {e.reason}"
+    return None
 
 
 def to_jpeg(img: Image.Image, quality: int = 88) -> bytes:

@@ -41,14 +41,15 @@ class BlooApi:
     def pending_count(self) -> int:
         r = self.s.get(f"{self.base}/api/imagegen/pending-count", timeout=TIMEOUT)
         r.raise_for_status()
-        return int(r.json().get("count", 0))
+        j = r.json()
+        return int(j.get("pending", j.get("count", 0)))
 
     def claim(self, limit: int) -> list[Job]:
         r = self.s.post(f"{self.base}/api/imagegen/claim", params={"limit": limit}, timeout=TIMEOUT)
         r.raise_for_status()
         data = r.json()
         if isinstance(data, dict):  # tolerate {jobs:[...]} wrappers
-            data = data.get("jobs") or data.get("items") or []
+            data = data.get("images") or data.get("jobs") or data.get("items") or []
         jobs = []
         for d in data:
             try:

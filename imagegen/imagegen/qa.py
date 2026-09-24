@@ -22,6 +22,8 @@ QUESTIONS = [
                         "hands and lighting in the reference.", False),
     ("text_or_logo", "Is any watermark, logo, or text overlay visible in the OUTPUT?", False),
     ("cluttered", "Is the OUTPUT background cluttered with more than one prop, pattern, or competing object?", False),
+    ("product_floating", "Do the sunglasses in the OUTPUT look like they float in the air instead of resting on "
+                         "the linen surface with a shadow where they touch it?", False),
     ("plant_visible", "Is at least one tropical plant (palm or monstera leaf) visible in the OUTPUT, softly out "
                       "of focus?", True),
 ]
