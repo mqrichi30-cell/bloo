@@ -30,8 +30,8 @@ _COMMON = (
 
 PROMPTS: dict[str, str] = {
     "hero": (
-        "Low table-top view: camera just above a table, looking across it at a 3/4 angle about 20 degrees "
-        "down. A natural beige linen tablecloth covers the table and fills the entire lower two thirds of "
+        "Low table-top view: camera very close to the table surface, only about 10 degrees above it, "
+        "looking across it at a 3/4 angle, like a studio product shot. A natural beige linen tablecloth covers the table and fills the entire lower two thirds of "
         "the frame, from the bottom edge up past the middle, fine weave sharp in the foreground. "
         "The camera is close, so the near edge of the table is outside the frame: the flat tabletop "
         "runs straight off the bottom of the image. "

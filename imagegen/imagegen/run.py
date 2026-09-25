@@ -8,20 +8,24 @@ from __future__ import annotations
 
 import argparse
 import math
+import random
 import sys
 import time
 from pathlib import Path
 from typing import Any
 
 
+import requests
 from PIL import Image
 
 from .bloo_api import BlooApi, Job
 from .composite import OUTPUT_SIZES, composite, to_jpeg
-from .cutout import cut_out, load_source
+from .cutout import cut_out, load_source, segment_alpha
+from .edit import (EDIT_PROMPTS, GEN_SIZE, build_reference, fidelity_gate, product_fits_square,
+                   restore_product, to_outputs)
 from .platecheck import PlateRejected
 from .plates import PlatePool, local_plate, validate_plate
-from .providers import ProviderChain, QuotaExhausted
+from .providers import CloudflareEdit, ProviderChain, ProviderError, QuotaExhausted
 from .qa import run_qa
 from .storage import Storage
 from .util import VARIANTS, compact_ts, env, log, now_ts, setup_logging
@@ -53,12 +57,62 @@ def _provider_of(plate_path: str) -> str:
     return parts[1] if len(parts) >= 3 else "cache"
 
 
-def process_job(job: Job, pool: PlatePool, storage: Storage) -> dict[str, Any]:
+EDIT_TRIES = 2  # first seed + one retry with another seed, then the composite fallback
+RESTORE = env("IMAGEGEN_EDIT_RESTORE", "1") != "0"
+
+
+def edit_scene(cut: Image.Image, variant: str, editor: CloudflareEdit | None,
+               tries: int = EDIT_TRIES) -> tuple[dict[str, Image.Image] | None, dict[str, Any]]:
+    """Primary path: FLUX.2 edit of the real product + local fidelity gate.
+    Returns ({"1x1": img, "4x5": img}, meta) or (None, meta) when the caller must fall back."""
+    meta: dict[str, Any] = {"path": "edit", "attempts": []}
+    if editor is None or not editor.available():
+        meta["skipped"] = "no edit provider available"
+        return None, meta
+    ref = build_reference(cut)
+    for _ in range(tries):
+        seed = random.randint(1, 2**31 - 1)
+        try:
+            img, model = editor.edit(EDIT_PROMPTS.get(variant, EDIT_PROMPTS["hero"]), ref.image, GEN_SIZE, seed)
+        except QuotaExhausted as e:
+            editor.mark_exhausted(e.reset_at, str(e))
+            meta["skipped"] = f"quota: {str(e)[:120]}"
+            return None, meta
+        except (ProviderError, requests.RequestException, KeyError, ValueError, OSError) as e:
+            log.warning("edit provider failed: %s", str(e)[:300])
+            meta["skipped"] = f"provider error: {type(e).__name__}"
+            return None, meta
+        alpha = segment_alpha(img)
+        rep = fidelity_gate(ref, img, alpha, RESTORE)
+        att = {"model": model, "seed": seed, "ok": rep.ok, "reason": rep.reason,
+               **{k: v for k, v in rep.stats.items() if k not in ("wm", "hand")}}
+        if rep.ok and not product_fits_square(alpha, OUTPUT_SIZES["1x1"][1] / OUTPUT_SIZES["4x5"][1]):
+            att.update(ok=False, reason="product too large for the 1:1 crop")
+        meta["attempts"].append(att)
+        log.info("edit %s seed %d -> %s %s", model, seed, "OK" if att["ok"] else "REJECTED", att["reason"])
+        if not att["ok"] or rep.fit is None:
+            continue
+        final = restore_product(img, ref, rep.homography if rep.homography is not None else rep.fit, alpha) if RESTORE else img
+        meta.update(model=model, restored=RESTORE)
+        return to_outputs(final, alpha, OUTPUT_SIZES), meta
+    return None, meta
+
+
+def process_job(job: Job, pool: PlatePool, storage: Storage,
+                editor: CloudflareEdit | None = None) -> dict[str, Any]:
     variant = job.variant if job.variant in VARIANTS else "hero"
     src = load_source(job.source_url)
     cut, hand = cut_out(src)
     if hand.has_hand:
         return _err("source_has_hand", qa={"local": hand.as_dict()})
+
+    outs, emeta = edit_scene(cut, variant, editor)
+    if outs is not None:
+        qa = run_qa(src, outs["1x1"])
+        qa.update(local=hand.as_dict(), edit=emeta)
+        if not set(qa.get("failed", [])) & {"hand_visible", "product_differs", "text_or_logo"}:
+            return _upload(job, variant, outs["1x1"], outs["4x5"], storage, qa, f"cfedit:{emeta['model']}")
+        log.info("edit output failed vision QA (%s); falling back to composite", qa.get("failed"))
 
     qa: dict[str, Any] = {}
     qa_retry_used = False
@@ -76,6 +130,7 @@ def process_job(job: Job, pool: PlatePool, storage: Storage) -> dict[str, Any]:
         qa = run_qa(src, square)
         qa["local"] = hand.as_dict()
         qa["plate"] = plate_path
+        qa["edit"] = emeta
         failed = set(qa.get("failed", []))
         if not failed:
             break
@@ -90,6 +145,11 @@ def process_job(job: Job, pool: PlatePool, storage: Storage) -> dict[str, Any]:
     else:
         return {"estado": "rechazada", "qa": qa, "provider": _provider_of(plate_path)}
 
+    return _upload(job, variant, square, portrait, storage, qa, _provider_of(plate_path))
+
+
+def _upload(job: Job, variant: str, square: Image.Image, portrait: Image.Image, storage: Storage,
+            qa: dict[str, Any], provider: str) -> dict[str, Any]:
     ts = compact_ts()
     path = f"models/{job.model_id}/{variant}-{ts}.jpg"
     path45 = f"models/{job.model_id}/{variant}-{ts}-4x5.jpg"
@@ -97,7 +157,7 @@ def process_job(job: Job, pool: PlatePool, storage: Storage) -> dict[str, Any]:
     storage.upload(path45, to_jpeg(portrait, JPEG_Q), "image/jpeg")
     qa["portraitUrl"] = storage.public_url(path45)
     return {"estado": "lista", "publicUrl": storage.public_url(path), "storagePath": path,
-            "provider": _provider_of(plate_path), "qa": qa}
+            "provider": provider, "qa": qa}
 
 
 def run_worker(max_jobs: int, max_minutes: float, once: bool = False) -> int:
@@ -117,6 +177,7 @@ def run_worker(max_jobs: int, max_minutes: float, once: bool = False) -> int:
     storage = Storage(env("SUPABASE_URL") or "", env("SUPABASE_SERVICE_KEY") or "", BUCKET)
     state: dict[str, Any] = storage.read_json(PROVIDER_STATE, {})
     chain = ProviderChain(state)
+    editor = CloudflareEdit(state)
     pool = PlatePool(storage, chain)
     configured = [p.key for p in chain.providers if p.configured()]
     log.info("providers configured: %s", ", ".join(configured) or "none")
@@ -130,7 +191,8 @@ def run_worker(max_jobs: int, max_minutes: float, once: bool = False) -> int:
         pool.save()
 
     def servable() -> list[str]:
-        return [v for v in VARIANTS if pool.can_serve(v)]
+        edit_ok = editor.available()
+        return [v for v in VARIANTS if edit_ok or pool.can_serve(v)]
 
     try:
         avg = 180.0  # pessimistic first guess (BiRefNet on a CI CPU), refined as jobs finish
@@ -165,7 +227,7 @@ def run_worker(max_jobs: int, max_minutes: float, once: bool = False) -> int:
                     continue
                 t0 = time.monotonic()
                 try:
-                    payload = process_job(job, pool, storage)
+                    payload = process_job(job, pool, storage, editor)
                 except QuotaExhausted as e:
                     exhausted_until = e.reset_at
                     payload = _quota_wait(e.reset_at, str(e))
@@ -207,7 +269,36 @@ def next_wait() -> int:
     return int(min(max(wait, 60), 86400))
 
 
-def run_dry(source: str, variants: list[str], plate: str | None, cutout: str | None = None) -> int:
+def run_dry_edit(stem: str, cut: Image.Image, variant: str, edit_image: str | None, online: bool) -> list[Path]:
+    """Edit path in dry-run. Offline with --edit-image (a render saved earlier: gate + restore only);
+    --edit calls Workers AI for real (costs ~160 neurons, needs CF_ACCOUNT_ID/CF_API_TOKEN)."""
+    ref = build_reference(cut)
+    ref.image.save(OUT_DIR / f"{stem}-edit-ref.png")
+    written = [OUT_DIR / f"{stem}-edit-ref.png"]
+    if edit_image:
+        img = Image.open(edit_image).convert("RGB")
+    else:
+        state: dict[str, Any] = {}
+        img, model = CloudflareEdit(state).edit(EDIT_PROMPTS[variant], ref.image, GEN_SIZE,
+                                                random.randint(1, 2**31 - 1))
+        img.save(OUT_DIR / f"{stem}-edit-raw.jpg", quality=95)
+        written.append(OUT_DIR / f"{stem}-edit-raw.jpg")
+        log.info("edit by %s, %.0f neurons", model, state.get("cf_neurons", {}).get("used", 0))
+    alpha = segment_alpha(img)
+    rep = fidelity_gate(ref, img, alpha, RESTORE)
+    log.info("fidelity gate: %s %s %s", "OK" if rep.ok else "REJECTED", rep.reason,
+             {k: v for k, v in rep.stats.items() if k not in ("wm", "hand")})
+    if rep.fit is not None:
+        final = restore_product(img, ref, rep.homography if rep.homography is not None else rep.fit, alpha) if RESTORE else img
+        for tag, im in to_outputs(final, alpha, OUTPUT_SIZES).items():
+            out = OUT_DIR / f"{stem}-{variant}-{tag}-edit{'' if rep.ok else '-REJECTED'}.jpg"
+            out.write_bytes(to_jpeg(im, JPEG_Q))
+            written.append(out)
+    return written
+
+
+def run_dry(source: str, variants: list[str], plate: str | None, cutout: str | None = None,
+            edit_image: str | None = None, online_edit: bool = False) -> int:
     """Offline: cutout + plate gates + composite into out/ (network only to fetch a URL source)."""
     OUT_DIR.mkdir(exist_ok=True)
     stem = Path(source.split("?")[0]).stem or "source"
@@ -224,6 +315,10 @@ def run_dry(source: str, variants: list[str], plate: str | None, cutout: str | N
         written.append(OUT_DIR / f"{stem}-cutout.png")
         if hand.has_hand:
             log.warning("source_has_hand -> a real run would report estado=error, error=source_has_hand")
+    if edit_image or online_edit:
+        for p in run_dry_edit(stem, cut, variants[0], edit_image, online_edit):
+            print(p)
+        return 0
     ptag = Path(plate).stem if plate else ""
     for v in variants:
         pl = local_plate(v, plate)
@@ -254,6 +349,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--variant", choices=VARIANTS, help="dry-run: one variant (default: all)")
     ap.add_argument("--plate", help="dry-run: use this local plate instead of the placeholder")
     ap.add_argument("--cutout", help="dry-run: reuse this cutout PNG (skips segmentation)")
+    ap.add_argument("--edit-image", help="dry-run: offline gate + restore on a saved FLUX.2 render")
+    ap.add_argument("--edit", action="store_true",
+                    help="dry-run: call Workers AI FLUX.2 for real (network, ~160 neurons) and gate it")
     ap.add_argument("--once", action="store_true",
                     help="one bounded pass for Task Scheduler: quick exit if nothing pending; exit 0 unless misconfigured")
     ap.add_argument("--next-wait", action="store_true", help="print seconds until the next useful run")
@@ -267,7 +365,8 @@ def main(argv: list[str] | None = None) -> int:
     if a.dry_run:
         if not a.source:
             ap.error("--dry-run needs --source")
-        return run_dry(a.source, [a.variant] if a.variant else list(VARIANTS), a.plate, a.cutout)
+        return run_dry(a.source, [a.variant] if a.variant else list(VARIANTS), a.plate, a.cutout,
+                       a.edit_image, a.edit)
     try:
         return run_worker(a.max_jobs, a.max_minutes, once=a.once)
     except Exception:  # noqa: BLE001 - claimed jobs were already reported inside run_worker

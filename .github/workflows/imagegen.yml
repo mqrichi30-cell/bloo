@@ -59,7 +59,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.u2net
-          key: rembg-${{ vars.IMAGEGEN_REMBG_MODEL || 'birefnet-general' }}-v1
+          key: rembg-${{ vars.IMAGEGEN_REMBG_MODEL || 'birefnet-general' }}-gate-lite-v2
 
       - name: Install dependencies
         if: steps.pending.outputs.count != '0'

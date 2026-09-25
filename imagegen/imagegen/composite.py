@@ -107,6 +107,49 @@ def _color_match(cut: np.ndarray, plate_region: np.ndarray, strength: float = 0.
     return out
 
 
+def _hf_energy(gray: np.ndarray, mask: np.ndarray | None = None) -> float:
+    """Mean |I - blur(I)|: how much fine detail (sharpness + noise) an image region carries."""
+    im = Image.fromarray(np.uint8(np.clip(gray, 0, 255)))
+    hp = np.abs(gray - np.asarray(im.filter(ImageFilter.GaussianBlur(1.5)), np.float32))
+    return float(hp[mask].mean()) if mask is not None and mask.any() else float(hp.mean())
+
+
+def _match_sharpness(cut: np.ndarray, plate_roi: np.ndarray) -> np.ndarray:
+    """Studio product shots are razor sharp; FLUX plates are soft. A product crisper than the
+    surface it rests on reads as a sticker, so soften it (RGB and alpha) toward the plate."""
+    a = cut[..., 3] > 200
+    inner = np.asarray(Image.fromarray(np.uint8(a) * 255).filter(ImageFilter.MinFilter(5))) > 0
+    lum = cut[..., :3].astype(np.float32) @ [0.299, 0.587, 0.114]
+    prod = _hf_energy(lum, inner)
+    plate = _hf_energy(plate_roi.astype(np.float32) @ [0.299, 0.587, 0.114])
+    if prod <= 0 or plate <= 0 or prod <= plate * 1.3:
+        return cut
+    radius = float(np.clip(0.35 * np.log2(prod / plate), 0.3, 1.1))
+    out = np.asarray(Image.fromarray(cut, "RGBA").filter(ImageFilter.GaussianBlur(radius))).copy()
+    out[..., :3] = np.where(cut[..., 3:4] > 0, out[..., :3], cut[..., :3])  # keep defringed colours
+    return out
+
+
+def _relight(cut: np.ndarray, base: np.ndarray, x: int, y: int, strength: float = 0.7) -> np.ndarray:
+    """Give the product the plate's light falloff: the low-frequency luminance of the plate around
+    the product (normalised to its mean) multiplies the product, so the side toward the window is
+    brighter and the far side dimmer, like everything else on the table."""
+    h, w = cut.shape[:2]
+    H, W = base.shape[:2]
+    pad = max(h, w) // 2
+    y0, y1, x0, x1 = max(0, y - pad), min(H, y + h + pad), max(0, x - pad), min(W, x + w + pad)
+    lum = base[y0:y1, x0:x1].astype(np.float32) @ [0.299, 0.587, 0.114]
+    low = np.asarray(Image.fromarray(np.uint8(np.clip(lum, 0, 255)))
+                     .filter(ImageFilter.GaussianBlur(max(8, max(h, w) // 4))), np.float32)
+    low = low[y - y0:y - y0 + h, x - x0:x - x0 + w]
+    if low.shape != (h, w) or low.mean() <= 1:
+        return cut
+    gain = 1 + strength * (low / low.mean() - 1)
+    out = cut.copy()
+    out[..., :3] = np.uint8(np.clip(cut[..., :3].astype(np.float32) * np.clip(gain, 0.8, 1.2)[..., None], 0, 255))
+    return out
+
+
 def _lower_hull(xs: np.ndarray, ys: np.ndarray) -> np.ndarray:
     """y of the lower convex hull (image coords, y down) evaluated at every x in xs."""
     pts: list[tuple[int, int]] = []
@@ -202,6 +245,8 @@ def composite(plate: Image.Image, cutout: Image.Image, variant: str, size: tuple
     x, y, _ = place(mask, cut.width, cut.height, lay, surface_edges(cov_plate))
     region = base[max(0, y - 40): y + cut.height + 40, max(0, x - 40): x + cut.width + 40]
     cut_arr = _color_match(np.asarray(cut).copy(), region)
+    cut_arr = _match_sharpness(cut_arr, base[y:y + cut.height, x:x + cut.width])
+    cut_arr = _relight(cut_arr, base, x, y)
     alpha_img = Image.fromarray(cut_arr[..., 3])
     a = cut_arr[..., 3].astype(np.float32) / 255
 

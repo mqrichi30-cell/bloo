@@ -176,24 +176,140 @@ class TogetherFlux(Provider):
         return _decode_image(requests.get(d["url"], timeout=TIMEOUT).content)
 
 
+# ------------------------------------------------------------------ Cloudflare neuron ledger
+# Workers AI free tier: 10,000 neurons per day per ACCOUNT, reset 00:00 UTC, shared by every model
+# (flux-1-schnell plates AND FLUX.2 edits). Prices from developers.cloudflare.com/workers-ai/platform/pricing
+# (checked 2026-09-25). Tiles are counted per started 512x512 tile (conservative).
+CF_NEURON_BUDGET = float(env("CF_NEURON_BUDGET", "9500") or 9500)  # keep ~5 % headroom under 10k
+CF_LEDGER = "cf_neurons"  # state key (global: the quota belongs to the account, not the host)
+
+
+def _tiles(w: int, h: int) -> int:
+    return -(-w // 512) * -(-h // 512)
+
+
+def cf_neurons(model: str, w: int, h: int, inputs: list[tuple[int, int]] | None = None, steps: int = 4) -> float:
+    """Neuron cost of one Workers AI image call."""
+    inputs = inputs or []
+    if model == "flux-1-schnell":
+        return 4.80 * _tiles(w, h) + 9.60 * steps
+    if model == "flux-2-klein-4b":
+        return 26.05 * _tiles(w, h) + 5.37 * sum(_tiles(*i) for i in inputs)
+    if model == "flux-2-klein-9b":
+        mp = w * h / 1024 ** 2
+        return 1363.64 + 181.82 * max(0.0, mp - 1) + 181.82 * sum(a * b / 1024 ** 2 for a, b in inputs)
+    if model == "flux-2-dev":
+        return steps * (37.50 * _tiles(w, h) + 18.75 * sum(_tiles(*i) for i in inputs))
+    raise ValueError(f"unknown Workers AI model {model}")
+
+
+def cf_ledger(state: dict[str, Any]) -> dict[str, Any]:
+    led = state.setdefault(CF_LEDGER, {})
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if led.get("day") != today:
+        led.clear()
+        led.update(day=today, used=0.0)
+    return led
+
+
+def cf_reserve(state: dict[str, Any], cost: float) -> None:
+    """Raise QuotaExhausted (reset 00:00 UTC) if `cost` would pass today's budget, else book it."""
+    led = cf_ledger(state)
+    if float(led["used"]) + cost > CF_NEURON_BUDGET:
+        raise QuotaExhausted(next_utc_midnight(),
+                             f"cloudflare neuron budget {led['used']:.0f}+{cost:.0f} > {CF_NEURON_BUDGET:.0f}")
+    led["used"] = round(float(led["used"]) + cost, 2)
+
+
+def _cf_check_quota(r: requests.Response) -> None:
+    low = r.text.lower()
+    # the daily neuron cap is not documented as a clean 429: sniff the error body too
+    if r.status_code >= 400 and ("neuron" in low or "allocation" in low or "quota" in low):
+        raise QuotaExhausted(next_utc_midnight(), f"HTTP {r.status_code}: {r.text[:200]}")
+
+
 class CloudflareFlux(Provider):
     name = "cloudflare"
     daily_cap = int(env("CF_DAILY_CAP", "150") or 150)  # ~58 neurons/img vs 10k/day
+
+    def __init__(self, state: dict[str, Any]) -> None:
+        super().__init__(state)
+        self.root = state
 
     def configured(self) -> bool:
         return bool(env("CF_ACCOUNT_ID") and env("CF_API_TOKEN"))
 
     def _generate(self, prompt: str, seed: int) -> Image.Image:
+        # FLUX.2 klein-4b draws far crisper linen than flux-1-schnell (104 vs 58 neurons per plate,
+        # and a plate is reused up to 15 times). CF_PLATE_MODEL=flux-1-schnell restores the old one.
+        model = env("CF_PLATE_MODEL", "flux-2-klein-4b") or "flux-2-klein-4b"
+        cf_reserve(self.root, cf_neurons(model, 1024, 1024))
         url = (f"https://api.cloudflare.com/client/v4/accounts/{env('CF_ACCOUNT_ID')}"
-               "/ai/run/@cf/black-forest-labs/flux-1-schnell")
-        r = requests.post(url, headers={"Authorization": f"Bearer {env('CF_API_TOKEN')}"},
-                          json={"prompt": prompt, "steps": 4, "seed": seed}, timeout=TIMEOUT)
-        low = r.text.lower()
-        # the daily neuron cap is not documented as a clean 429: sniff the error body too
-        if r.status_code >= 400 and ("neuron" in low or "allocation" in low or "quota" in low):
-            raise QuotaExhausted(next_utc_midnight(), f"HTTP {r.status_code}: {r.text[:200]}")
+               f"/ai/run/@cf/black-forest-labs/{model}")
+        headers = {"Authorization": f"Bearer {env('CF_API_TOKEN')}"}
+        if model.startswith("flux-2"):  # FLUX.2 on Workers AI only takes multipart form data
+            r = requests.post(url, headers=headers, timeout=TIMEOUT, files={
+                "prompt": (None, prompt), "width": (None, "1024"), "height": (None, "1024"),
+                "seed": (None, str(seed))})
+        else:
+            r = requests.post(url, headers=headers, json={"prompt": prompt, "steps": 4, "seed": seed},
+                              timeout=TIMEOUT)
+        _cf_check_quota(r)
         self._check(r)
         return _decode_image(base64.b64decode(r.json()["result"]["image"]))
+
+
+class CloudflareEdit(Provider):
+    """FLUX.2 [klein] instruction edit on Workers AI (multipart; inputs must be < 512x512).
+
+    klein-4b at 1024x1280 with one 511x511 reference: 6 output tiles x 26.05 + 1 input tile x 5.37
+    = 161.7 neurons -> ~58 edits/day on the free 10k (minus plates). klein-9b costs ~1,470 per call
+    (~6/day) and flux-2-dev ~4,200 at 25 steps (~2/day), so they are opt-in via CF_EDIT_MODELS.
+    """
+    name = "cfedit"
+    min_interval = 1.0
+
+    def __init__(self, state: dict[str, Any]) -> None:
+        super().__init__(state)
+        self.root = state
+        self.models = [m.strip() for m in (env("CF_EDIT_MODELS", "flux-2-klein-4b") or "").split(",") if m.strip()]
+
+    def configured(self) -> bool:
+        return bool(env("CF_ACCOUNT_ID") and env("CF_API_TOKEN")) and env("CF_EDIT_DISABLED") != "1"
+
+    def available(self) -> bool:
+        led = cf_ledger(self.root)
+        cheapest = min((cf_neurons(m, 1024, 1280, [(511, 511)]) for m in self.models), default=1e9)
+        return super().available() and float(led["used"]) + cheapest <= CF_NEURON_BUDGET
+
+    def edit(self, prompt: str, ref: Image.Image, size: tuple[int, int], seed: int,
+             model: str | None = None) -> tuple[Image.Image, str]:
+        """One edit call; returns (image, model). Quota bookkeeping like Provider.generate."""
+        model = model or self.models[0]
+        if max(ref.size) >= 512:
+            raise ValueError("Workers AI FLUX.2 inputs must be smaller than 512x512")
+        wait = self.min_interval - (now_ts() - float(self.state.get("last_call", 0)))
+        if wait > 0:
+            time.sleep(min(wait, self.min_interval))
+        cf_reserve(self.root, cf_neurons(model, size[0], size[1], [ref.size]))
+        self.state["last_call"] = now_ts()
+        buf = io.BytesIO()
+        ref.convert("RGB").save(buf, "PNG")
+        files = {"prompt": (None, prompt), "width": (None, str(size[0])), "height": (None, str(size[1])),
+                 "seed": (None, str(seed)), "input_image_0": ("ref.png", buf.getvalue(), "image/png")}
+        if model == "flux-2-dev":
+            files["steps"] = (None, env("CF_EDIT_STEPS", "25") or "25")
+        url = (f"https://api.cloudflare.com/client/v4/accounts/{env('CF_ACCOUNT_ID')}"
+               f"/ai/run/@cf/black-forest-labs/{model}")
+        r = requests.post(url, headers={"Authorization": f"Bearer {env('CF_API_TOKEN')}"}, files=files,
+                          timeout=TIMEOUT)
+        _cf_check_quota(r)
+        self._check(r)
+        day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        if self.state.get("day") != day:
+            self.state["day"], self.state["day_count"] = day, 0
+        self.state["day_count"] = self.state.get("day_count", 0) + 1
+        return _decode_image(base64.b64decode(r.json()["result"]["image"])), model
 
 
 _HMS = re.compile(r"(\d+):(\d{1,2}):(\d{2})")

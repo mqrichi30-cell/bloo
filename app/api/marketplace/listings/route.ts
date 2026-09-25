@@ -55,9 +55,13 @@ export async function GET() {
     const kitInput = { nombre: m.nombre, color: m.color, material: m.material, precioVentaCent: m.precioVentaCent };
     const kit = renderKit(kitInput, { agotado });
     // La más reciente no rechazada de cada variante (regenerar deja la vieja
-    // en 'rechazada', así que normalmente hay una sola).
+    // en 'rechazada', así que normalmente hay una sola). Durante una
+    // regeneración en bloque conviven la vieja 'lista' y la nueva pendiente:
+    // se muestra la 'lista' hasta que la nueva termine.
     const images = IMAGE_VARIANTS.flatMap((v) => {
-      const img = m.generatedImages.find((i) => i.variant === v);
+      const img =
+        m.generatedImages.find((i) => i.variant === v && i.estado === "lista") ??
+        m.generatedImages.find((i) => i.variant === v);
       return img
         ? [{ id: img.id, variant: img.variant, estado: img.estado, publicUrl: img.publicUrl, portraitUrl: img.portraitUrl }]
         : [];

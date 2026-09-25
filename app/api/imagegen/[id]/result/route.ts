@@ -95,8 +95,23 @@ export async function POST(request: Request, { params }: { params: { id: string 
     }
     const img = await tx.generatedImage.findUniqueOrThrow({
       where: { id: idParsed.data },
-      select: { modelId: true, variant: true, attempts: true },
+      select: { modelId: true, variant: true, attempts: true, createdAt: true },
     });
+    if (b.estado === "lista") {
+      // Regeneración en bloque (python -m imagegen.requeue): la vieja siguió
+      // 'lista' mientras esta se generaba, para no dejar la publicación sin
+      // hero. Ahora que la nueva está lista, la vieja pasa a 'rechazada'.
+      await tx.generatedImage.updateMany({
+        where: {
+          modelId: img.modelId,
+          variant: img.variant,
+          estado: "lista",
+          id: { not: idParsed.data },
+          createdAt: { lt: img.createdAt },
+        },
+        data: { estado: "rechazada", lockedUntil: null },
+      });
+    }
     const transicion = await reevaluarListing(tx, img.modelId);
     return { img, transicion };
   });

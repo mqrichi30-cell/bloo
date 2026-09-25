@@ -11,19 +11,36 @@ from PIL import Image, ImageFilter
 from . import safe_fetch
 from .util import env, log
 
-_SESSION = None
+_SESSIONS: dict[str, object] = {}
 # birefnet-general is the quality default (~90-150 s/img on CPU); birefnet-general-lite is ~3x faster
 MODEL_NAME = env("IMAGEGEN_REMBG_MODEL", "birefnet-general") or "birefnet-general"
+# the fidelity gate only needs a silhouette of the edited output: the lite model is enough
+GATE_MODEL = env("IMAGEGEN_GATE_MODEL", "birefnet-general-lite") or "birefnet-general-lite"
 
 
-def _session():
-    global _SESSION
-    if _SESSION is None:
+def _session(name: str | None = None):
+    name = name or MODEL_NAME
+    if name not in _SESSIONS:
         from rembg import new_session  # heavy import, lazy
 
-        log.info("loading rembg model %s (first run downloads weights; U2NET_HOME overrides the dir)", MODEL_NAME)
-        _SESSION = new_session(MODEL_NAME)
-    return _SESSION
+        log.info("loading rembg model %s (first run downloads weights; U2NET_HOME overrides the dir)", name)
+        _SESSIONS[name] = new_session(name)
+    return _SESSIONS[name]
+
+
+def segment_alpha(img: Image.Image, model: str | None = None) -> np.ndarray:
+    """Full-frame product alpha (0..1) of an arbitrary photo, e.g. the edited scene for the gate."""
+    from rembg import remove
+
+    work = img.convert("RGB")
+    if max(work.size) > 1280:
+        work = work.copy()
+        work.thumbnail((1280, 1280), Image.LANCZOS)
+    out = remove(work, session=_session(model or GATE_MODEL), only_mask=True)
+    a = clean_alpha(np.asarray(out.convert("L")))
+    if work.size != img.size:
+        a = np.asarray(Image.fromarray(a).resize(img.size, Image.BILINEAR))
+    return a.astype(np.float32) / 255
 
 
 def load_source(src: str, allow_local: bool = False) -> Image.Image:
