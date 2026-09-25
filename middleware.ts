@@ -16,7 +16,9 @@ import {
 // sesión cualquier ruta futura que empiece igual (ej. "/api/sociosAdmin"
 // colaría con un prefijo "/api/socios") — auditoría de seguridad
 // 2026-08-16. Cada ruta pública nueva se agrega acá a mano.
-const PUBLIC_PATHS = ["/login", "/socios"];
+// "/privacidad" = política pública exigida por Meta App Review (Messenger);
+// su ancla #eliminar-datos es la URL de instrucciones de eliminación de datos.
+const PUBLIC_PATHS = ["/login", "/socios", "/privacidad"];
 const PUBLIC_API_PATHS = [
   "/api/auth/login",
   "/api/auth/logout",
