@@ -72,6 +72,9 @@ export function SaleSheet({ open, onClose, onSuccess }: SaleSheetProps) {
     setPickedEstuches([]);
     setPairSelected(null);
     setError(null);
+    // submitSale no lo apaga en el camino feliz (cierra la hoja); sin esto la
+    // siguiente venta sin recargar quedaba con "Continuar" girando para siempre.
+    setSubmitting(false);
 
     apiFetch<{ medios: MedioPago[] }>("/api/medios-pago")
       .then((d) => setMedios(d.medios))
