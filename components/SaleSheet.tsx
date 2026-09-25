@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, Check, Glasses, RefreshCw } from "lucide-react";
+import { ArrowLeft, Glasses, RefreshCw } from "lucide-react";
 import { BottomSheet } from "@/components/ui/BottomSheet";
 import { QuantityStepper } from "@/components/ui/QuantityStepper";
 import { CurrencyInput } from "@/components/ui/CurrencyInput";
@@ -11,6 +11,7 @@ import { apiFetch, ApiError } from "@/lib/api-client";
 import { useToast } from "@/components/ToastProvider";
 import type { NihaoVariant } from "@/components/NihaoPairPicker";
 import type { PickableModel } from "@/components/ModelPicker";
+import { PairCard } from "@/components/PairCard";
 
 const SALE_FLAVORS = ["Venta registrada.", "Listo. Buen ojo.", "Directo al mar.", "Otra que se va con estilo."];
 
@@ -321,49 +322,20 @@ export function SaleSheet({ open, onClose, onSuccess }: SaleSheetProps) {
           )}
 
           {!loadingVariants && availableVariants.length > 0 && (
-            <div className="grid max-h-[45dvh] grid-cols-2 gap-3 overflow-y-auto">
-              {availableVariants.map((v) => {
-                const isSelected = v.id === pairSelected;
-                return (
-                  <button
+            // Scroll y grid separados a propósito: ver comentario en PairCard.tsx
+            // (WebKit colapsaba las filas del grid dentro del contenedor con overflow).
+            <div className="max-h-[45dvh] overflow-y-auto overscroll-contain">
+              <div className="grid auto-rows-max grid-cols-2 gap-3">
+                {availableVariants.map((v) => (
+                  <PairCard
                     key={v.id}
-                    type="button"
-                    onClick={() => setPairSelected(isSelected ? null : v.id)}
-                    className={`relative flex flex-col overflow-hidden rounded-lg border-2 text-left transition-all active:scale-[0.97] ${
-                      isSelected
-                        ? "border-navy-900 shadow-md"
-                        : "border-line-200 hover:border-blue-300"
-                    }`}
-                  >
-                    {isSelected && (
-                      <div className="absolute right-2 top-2 z-10 flex h-6 w-6 items-center justify-center rounded-full bg-navy-900 text-white shadow">
-                        <Check size={14} strokeWidth={2.5} />
-                      </div>
-                    )}
-                    <div className="relative aspect-square w-full overflow-hidden bg-surface-alt">
-                      {v.imageUrl ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img
-                          src={`/api/nihao-img?url=${encodeURIComponent(v.imageUrl)}`}
-                          alt={`${v.productName} — ${v.nihaoColor}`}
-                          className="h-full w-full object-cover"
-                          loading="eager"
-                        />
-                      ) : (
-                        <div className="flex h-full w-full items-center justify-center text-blue-300">
-                          <Glasses size={28} strokeWidth={1.5} />
-                        </div>
-                      )}
-                    </div>
-                    <div className="flex flex-col gap-0.5 bg-white p-2">
-                      <p className="line-clamp-2 text-caption font-medium text-ink-900">
-                        {v.nihaoColor}
-                      </p>
-                      <p className="truncate text-[11px] text-ink-600">{v.nihaoSku}</p>
-                    </div>
-                  </button>
-                );
-              })}
+                    variant={v}
+                    selected={v.id === pairSelected}
+                    onToggle={() => setPairSelected(v.id === pairSelected ? null : v.id)}
+                    eager
+                  />
+                ))}
+              </div>
             </div>
           )}
 

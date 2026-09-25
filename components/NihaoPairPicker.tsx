@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, Glasses, RefreshCw } from "lucide-react";
+import { Glasses, RefreshCw } from "lucide-react";
+import { PairCard } from "@/components/PairCard";
 import { BottomSheet } from "@/components/ui/BottomSheet";
 import { PrimaryButton, SecondaryButton } from "@/components/ui/Button";
 import { apiFetch, ApiError } from "@/lib/api-client";
@@ -111,56 +112,15 @@ export function NihaoPairPicker({
         )}
 
         {!loading && variants.length > 0 && (
-          <div className="grid grid-cols-2 gap-3">
-            {variants.map((v) => {
-              const isSelected = v.id === selected;
-              return (
-                <button
-                  key={v.id}
-                  type="button"
-                  onClick={() => setSelected(isSelected ? null : v.id)}
-                  className={`relative flex flex-col overflow-hidden rounded-lg border-2 text-left transition-all active:scale-[0.97] ${
-                    isSelected
-                      ? "border-navy-900 shadow-md"
-                      : "border-line-200 hover:border-blue-300"
-                  }`}
-                >
-                  {/* Checkmark overlay */}
-                  {isSelected && (
-                    <div className="absolute right-2 top-2 z-10 flex h-6 w-6 items-center justify-center rounded-full bg-navy-900 text-white shadow">
-                      <Check size={14} strokeWidth={2.5} />
-                    </div>
-                  )}
-
-                  {/* Imagen del color exacto */}
-                  <div className="relative aspect-square w-full overflow-hidden bg-surface-alt">
-                    {v.imageUrl ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={`/api/nihao-img?url=${encodeURIComponent(v.imageUrl)}`}
-                        alt={`${v.productName} — ${v.nihaoColor}`}
-                        className="h-full w-full object-cover"
-                        loading="lazy"
-                      />
-                    ) : (
-                      <div className="flex h-full w-full items-center justify-center text-blue-300">
-                        <Glasses size={28} strokeWidth={1.5} />
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Info del par */}
-                  <div className="flex flex-col gap-0.5 bg-white p-2">
-                    <p className="line-clamp-2 text-caption font-medium text-ink-900">
-                      {v.nihaoColor}
-                    </p>
-                    <p className="truncate text-caption text-ink-600 text-[11px]">
-                      {v.nihaoSku}
-                    </p>
-                  </div>
-                </button>
-              );
-            })}
+          <div className="grid auto-rows-max grid-cols-2 gap-3">
+            {variants.map((v) => (
+              <PairCard
+                key={v.id}
+                variant={v}
+                selected={v.id === selected}
+                onToggle={() => setSelected(v.id === selected ? null : v.id)}
+              />
+            ))}
           </div>
         )}
 
