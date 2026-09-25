@@ -43,6 +43,8 @@ export function SaleSheet({ open, onClose, onSuccess }: SaleSheetProps) {
 
   // Reference prices for auto-suggestion
   const [lentesPrice, setLentesPrice] = useState(0);
+  // Modelo genérico para lentes vendidos sin elegir par (botón "Saltar").
+  const [genericLentesId, setGenericLentesId] = useState<string | null>(null);
   const [estuchePrice, setEstuchePrice] = useState(0);
 
   // Step 2 state (pair picking)
@@ -85,6 +87,9 @@ export function SaleSheet({ open, onClose, onSuccess }: SaleSheetProps) {
       .then((d) => {
         const lentes = d.models.find((m) => m.categoria === "lentes");
         if (lentes) setLentesPrice(lentes.precioVentaCent);
+        const generico =
+          d.models.find((m) => m.nombre.trim().toLowerCase() === "lentes bloo") ?? lentes;
+        setGenericLentesId(generico?.id ?? null);
         const estuche = d.models.find((m) => m.nombre.toLowerCase().includes("stuche"));
         if (estuche) setEstuchePrice(estuche.precioVentaCent);
         setEstucheModels(d.models.filter((m) => m.nombre.toLowerCase().includes("stuche")));
@@ -152,6 +157,14 @@ export function SaleSheet({ open, onClose, onSuccess }: SaleSheetProps) {
     try {
       // Build items: one per pair (not grouped) so we can match variants 1:1 to saleItems
       const lentesItems = pairs.map((p) => ({ modelId: p.modelId, cantidad: 1 }));
+      // Lentes sin par elegido ("Saltar selección de pares") se venden como el
+      // modelo genérico. Antes se descartaban: la venta quedaba solo con el
+      // estuche, o no se guardaba nada si no había estuche (bug 2026-09-25).
+      const sinPar = lentesQty - pairs.length;
+      if (sinPar > 0) {
+        if (!genericLentesId) throw new Error("Falta el modelo 'Lentes bloo' para registrar lentes sin par.");
+        lentesItems.push({ modelId: genericLentesId, cantidad: sinPar });
+      }
 
       // Estuches grouped by modelId
       const estucheMap = new Map<string, number>();
