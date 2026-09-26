@@ -13,7 +13,8 @@ import { AwaitingImagesCard } from "./AwaitingImagesCard";
 import { SoldPendingCard } from "./SoldPendingCard";
 import { PublishedCard } from "./PublishedCard";
 import { ArchivedRow } from "./ArchivedRow";
-import type { Listing, ListingAction } from "./types";
+import { RobotCard } from "./RobotCard";
+import type { Listing, ListingAction, RobotState } from "./types";
 
 type SectionKey = "porMarcarVendido" | "listosParaPublicar" | "esperandoImagenes" | "publicados" | "archivados";
 
@@ -22,6 +23,7 @@ const PULL_THRESHOLD = 64;
 export function MarketplaceView() {
   const { showToast } = useToast();
   const [listings, setListings] = useState<Listing[] | null>(null);
+  const [robot, setRobot] = useState<RobotState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [collapsed, setCollapsed] = useState<Set<SectionKey>>(new Set<SectionKey>(["archivados"]));
@@ -31,7 +33,18 @@ export function MarketplaceView() {
   const [refreshing, setRefreshing] = useState(false);
   const touchStartY = useRef<number | null>(null);
 
+  // Aparte de las publicaciones: si el estado del robot falla, el panel
+  // sigue sirviendo para publicar a mano.
+  const loadRobot = useCallback(async () => {
+    try {
+      setRobot(await apiFetch<RobotState>("/api/robot/state"));
+    } catch {
+      setRobot(null);
+    }
+  }, []);
+
   const load = useCallback(async () => {
+    loadRobot();
     try {
       // La API responde { listings: [...] }; se acepta también un arreglo plano.
       const data = await apiFetch<Listing[] | { listings: Listing[] }>("/api/marketplace/listings");
@@ -40,7 +53,7 @@ export function MarketplaceView() {
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "No se pudo cargar el Marketplace");
     }
-  }, []);
+  }, [loadRobot]);
 
   useEffect(() => {
     load();
@@ -52,6 +65,11 @@ export function MarketplaceView() {
       body: JSON.stringify(body),
     });
     await load();
+  };
+
+  const handleReanudarRobot = async () => {
+    await apiFetch("/api/robot/state", { method: "PATCH", body: JSON.stringify({ pausado: false }) });
+    await loadRobot();
   };
 
   const handleSync = async () => {
@@ -149,6 +167,8 @@ export function MarketplaceView() {
           </button>
         }
       />
+
+      {robot && <RobotCard state={robot} onReanudar={handleReanudarRobot} />}
 
       {listings === null && !error && (
         <div className="flex flex-col gap-3 px-5">

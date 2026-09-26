@@ -73,3 +73,19 @@ export const imageResultSchema = z
     path: ["publicUrl"],
   });
 export type ImageResult = z.infer<typeof imageResultSchema>;
+
+/** Resultado que reporta el robot de Marketplace (/api/robot/tasks/[id]/result).
+ *  'fallida' = reintentable (consume intento); 'necesita_humano' = captcha,
+ *  login o checkpoint: pausa el robot sin gastar intento. */
+export const robotResultSchema = z.object({
+  status: z.enum(["hecha", "fallida", "necesita_humano"]),
+  externalUrl: externalUrlSchema.optional(),
+  error: z.string().trim().max(2000).optional(),
+});
+export type RobotResult = z.infer<typeof robotResultSchema>;
+
+/** PATCH /api/robot/state (admin). */
+export const robotStatePatchSchema = z.object({
+  pausado: z.boolean(),
+  motivo: z.string().trim().min(1).max(500).optional(),
+});

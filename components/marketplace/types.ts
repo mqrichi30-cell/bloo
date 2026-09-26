@@ -43,3 +43,24 @@ export type ListingAction =
   | { action: "pausar" }
   | { action: "reanudar" }
   | { action: "regenerar_imagen"; imageId: string };
+
+export type RobotTaskStatus = "pendiente" | "en_proceso" | "hecha" | "fallida" | "cancelada";
+
+export interface RobotTask {
+  id: string;
+  action: "publicar" | "quitar";
+  status: RobotTaskStatus;
+  attempts: number;
+  lastError: string | null;
+  updatedAt: string;
+  nombre: string;
+  color: string | null;
+}
+
+/** GET /api/robot/state */
+export interface RobotState {
+  pausado: boolean;
+  motivo: string | null;
+  pendientes: number;
+  ultimas: RobotTask[];
+}

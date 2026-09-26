@@ -1,7 +1,10 @@
-// Loop diario de Marketplace (y botón "Sincronizar ahora"): compara el
-// inventario con las publicaciones y deja a Cris una lista de acciones.
+// Loop de Marketplace (cron diario, botón "Sincronizar ahora" y el inicio de
+// cada corrida del robot, /api/robot/next): compara el inventario con las
+// publicaciones y deja la lista de acciones.
 //
-// No publica nada — no existe API de Meta para Marketplace en CR. Lo que
+// No publica nada — no existe API de Meta para Marketplace en CR. Al final
+// deja la cola del robot coherente con los estados (lib/marketplace/tasks.ts:
+// encola publicar/quitar y cancela lo que ya no aplica). Lo que
 // hace es: crear la publicación (y encolar sus 3 imágenes IA) cuando un lente
 // tiene stock y no tiene publicación; pasarla a "lista para publicar" cuando
 // el hero está generado; y avisar "agotado, marcá vendido" cuando una
@@ -20,6 +23,7 @@ import {
   type ListingStatus,
 } from "./status";
 import { contextoDe, elegirSourceUrl, type Transicion } from "./listing";
+import { reconciliarTareas, type ReconciliacionTareas } from "./tasks";
 
 export interface MarketplaceSyncSummary {
   ranAt: string;
@@ -35,6 +39,8 @@ export interface MarketplaceSyncSummary {
   /** stockQty − stockReservado < 0: dato a regularizar (lote sin cargar). */
   stockNegativo: { modelId: string; nombre: string; available: number }[];
   errores: { modelId: string; error: string }[];
+  /** Ajuste de la cola del robot (null si falló: queda en `errores`). */
+  tareas: ReconciliacionTareas | null;
 }
 
 export async function runMarketplaceSync(opts: {
@@ -54,6 +60,7 @@ export async function runMarketplaceSync(opts: {
     sinImagenFuente: [],
     stockNegativo: [],
     errores: [],
+    tareas: null,
   };
 
   // Lentes vendibles + cualquier modelo que YA tenga publicación (aunque se
@@ -173,6 +180,14 @@ export async function runMarketplaceSync(opts: {
     } catch (e) {
       summary.errores.push({ modelId: "(alta en bloque)", error: e instanceof Error ? e.message : String(e) });
     }
+  }
+
+  // Después de TODAS las transiciones: la cola se decide sobre el estado ya
+  // actualizado de cada publicación.
+  try {
+    summary.tareas = await reconciliarTareas();
+  } catch (e) {
+    summary.errores.push({ modelId: "(cola robot)", error: e instanceof Error ? e.message : String(e) });
   }
 
   summary.durationMs = Date.now() - t0;

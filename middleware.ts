@@ -36,6 +36,10 @@ const PUBLIC_API_PATHS = [
   "/api/cron/marketplace-sync",
   "/api/imagegen/claim",
   "/api/imagegen/pending-count",
+  // Robot de Marketplace (Playwright en GitHub Actions): mismo x-cron-secret
+  // fail-closed. /api/robot/state NO va acá: es del panel (sesión admin).
+  "/api/robot/next",
+  "/api/robot/pending-count",
   // Webhook de Messenger: lo llama Meta, sin sesión. La ruta valida el
   // verify token (GET) y la firma X-Hub-Signature-256 (POST).
   "/api/meta/webhook",
@@ -47,6 +51,8 @@ const PUBLIC_API_PATHS = [
 const PUBLIC_API_PATTERNS = [
   // Resultado del worker de imágenes: /api/imagegen/<id>/result (x-cron-secret).
   /^\/api\/imagegen\/[^/]+\/result$/,
+  // Resultado del robot de Marketplace: /api/robot/tasks/<id>/result (x-cron-secret).
+  /^\/api\/robot\/tasks\/[^/]+\/result$/,
 ];
 
 /**

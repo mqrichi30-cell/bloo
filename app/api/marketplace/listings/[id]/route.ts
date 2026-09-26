@@ -11,6 +11,7 @@ import { listingPatchSchema } from "@/lib/marketplace/validation";
 import { kitHash, renderKit } from "@/lib/marketplace/kit";
 import { contextoDe, elegirSourceUrl, reevaluarListing } from "@/lib/marketplace/listing";
 import { isAllowedSourceUrl } from "@/lib/marketplace/hosts";
+import { cancelarTareasAbiertas } from "@/lib/marketplace/tasks";
 import {
   IMAGE_ESTADOS_ACTIVOS,
   isListingStatus,
@@ -110,7 +111,9 @@ export async function PATCH(request: Request, { params }: { params: { id: string
           ...(body.externalUrl ? { externalUrl: body.externalUrl } : {}),
           contentHash: hash,
         });
-        detalle = { de: actual, a: "publicado", externalUrl: body.externalUrl ?? null };
+        // Cris lo publicó a mano: el robot no debe publicarlo otra vez.
+        const canceladas = await cancelarTareasAbiertas(prisma, listing.id, ["publicar"], "Cris lo publicó a mano");
+        detalle = { de: actual, a: "publicado", externalUrl: body.externalUrl ?? null, tareasCanceladas: canceladas };
         break;
       }
 
@@ -124,7 +127,9 @@ export async function PATCH(request: Request, { params }: { params: { id: string
             `El inventario todavía muestra ${ctx.available} disponible(s). Si se vendió, registrá la venta en Vender: ` +
             "si no, la próxima sincronización lo vuelve a poner como listo para publicar.";
         }
-        detalle = { de: actual, a: "vendido", available: ctx.available };
+        // Cris ya lo quitó de Marketplace a mano: sobra la tarea 'quitar'.
+        const canceladas = await cancelarTareasAbiertas(prisma, listing.id, ["quitar"], "Cris lo marcó vendido a mano");
+        detalle = { de: actual, a: "vendido", available: ctx.available, tareasCanceladas: canceladas };
         break;
       }
 
@@ -133,7 +138,14 @@ export async function PATCH(request: Request, { params }: { params: { id: string
           throw new ConflictoError(`No se puede pausar desde "${actual}".`);
         }
         await mover({ status: "pausado" });
-        detalle = { de: actual, a: "pausado" };
+        // Pausada = el robot no la toca, ni para publicar ni para quitar.
+        const canceladas = await cancelarTareasAbiertas(
+          prisma,
+          listing.id,
+          ["publicar", "quitar"],
+          "Cris pausó la publicación"
+        );
+        detalle = { de: actual, a: "pausado", tareasCanceladas: canceladas };
         break;
       }
 

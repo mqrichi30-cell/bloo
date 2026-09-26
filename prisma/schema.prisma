@@ -138,6 +138,12 @@ model AppConfig {
   // SUBSIGUIENTE. Ver lib/lote.ts#computeFechaVencimientoPago. Editable en
   // Perfil (admin).
   diaCorteTarjeta       Int       @default(21)
+  // Robot de Marketplace (Playwright en GitHub Actions, ver /api/robot/**).
+  // Se pausa solo cuando reporta 'necesita_humano' (captcha, login, checkpoint
+  // de Facebook): seguir intentando con la cuenta trabada arriesga un bloqueo.
+  // Solo Cris lo reanuda desde el panel /marketplace.
+  robotPausado          Boolean   @default(false)
+  robotPausaMotivo      String?
   updatedAt             DateTime  @updatedAt
 }
 
@@ -606,9 +612,42 @@ model ChannelListing {
   externalUrl   String?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
+  tasks         MarketplaceTask[]
 
   @@unique([modelId, canal])
   @@index([status])
+}
+
+// Cola de trabajo del robot de Marketplace (Playwright, GitHub Actions cada
+// 2h, UNA tarea por corrida, de la más vieja a la más nueva). La llena
+// lib/marketplace/tasks.ts al final de cada sync; la consume /api/robot/**.
+// action: "publicar" | "quitar"
+// status: "pendiente" | "en_proceso" | "hecha" | "fallida" | "cancelada"
+// Nunca se borra: una tarea que dejó de tener sentido (volvió el stock antes
+// de quitar, se agotó antes de publicar, Cris lo hizo a mano) pasa a
+// 'cancelada' con el motivo en lastError.
+// INVARIANTE en la base (no expresable en Prisma): índice único PARCIAL
+// "MarketplaceTask_listing_abierta_key" — a lo sumo UNA tarea abierta
+// (pendiente/en_proceso) por publicación. Ver migración 20260926000000.
+model MarketplaceTask {
+  id          String         @id @default(uuid())
+  listingId   String
+  listing     ChannelListing @relation(fields: [listingId], references: [id])
+  action      String
+  status      String         @default("pendiente")
+  // Solo cuentan los fallos reales del robot y los leases vencidos; un
+  // 'necesita_humano' devuelve la tarea sin gastar intento.
+  attempts    Int            @default(0)
+  lastError   String?
+  // Lease de la corrida que la reclamó: vencido = el robot murió a mitad.
+  lockedUntil DateTime?
+  externalUrl String?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  doneAt      DateTime?
+
+  @@index([status, createdAt])
+  @@index([listingId])
 }
 
 // Imagen generada por IA para el kit. APPEND-ONLY: regenerar = fila nueva y la
