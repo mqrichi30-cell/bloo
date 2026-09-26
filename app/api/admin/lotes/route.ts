@@ -7,7 +7,7 @@ import { loteCreateSchema } from "@/lib/validation";
 import { deriveLoteCostoTotalCent, getTipoCambioUsdCent, computeFechaVencimientoPago } from "@/lib/lote";
 import { getAppConfig } from "@/lib/config";
 import { writeAudit } from "@/lib/audit";
-import { CUENTA_COMPRAS, CUENTA_CXP_COMPRAS, refIdCompraDeLote } from "@/lib/conta";
+import { CUENTA_COMPRAS, CUENTA_CXP_COMPRAS, CUENTA_GASTOS_OPERATIVOS, esInsumoGasto, refIdCompraDeLote } from "@/lib/conta";
 
 /**
  * Lote de compra de inventario, ATADO al modelo que recibe sus unidades
@@ -121,7 +121,7 @@ export async function POST(request: Request) {
       // `Lote.modelId -> Model.id`, un modelId inexistente reventaría el
       // create con un error de constraint en vez del 404 que ya devolvía el
       // update de stock de más abajo.
-      const modelo = await tx.model.findUnique({ where: { id: modelId }, select: { id: true } });
+      const modelo = await tx.model.findUnique({ where: { id: modelId }, select: { id: true, nombre: true } });
       if (!modelo) throw new LoteError("Modelo no encontrado", 404);
 
       const lote = await tx.lote.create({
@@ -175,9 +175,10 @@ export async function POST(request: Request) {
       // marcados `pagado`). Corrección real pendiente: agregar
       // `cuentaMedioPagoId` opcional a `loteCreateSchema` y, si viene, debitar
       // el gasto contra esa cuenta en vez de contra CxP.
-      const compras = await tx.cuenta.findUnique({ where: { codigo: CUENTA_COMPRAS } });
+      const codigoGasto = esInsumoGasto(modelo.nombre) ? CUENTA_GASTOS_OPERATIVOS : CUENTA_COMPRAS;
+      const compras = await tx.cuenta.findUnique({ where: { codigo: codigoGasto } });
       const cxp = await tx.cuenta.findUnique({ where: { codigo: CUENTA_CXP_COMPRAS } });
-      if (!compras) throw new LoteError(`Falta la cuenta '${CUENTA_COMPRAS}' (Compras de mercadería).`, 400);
+      if (!compras) throw new LoteError(`Falta la cuenta '${codigoGasto}'.`, 400);
       if (!cxp) throw new LoteError(`Falta la cuenta '${CUENTA_CXP_COMPRAS}' (Cuentas por pagar — Sara).`, 400);
 
       const refId = refIdCompraDeLote(lote);

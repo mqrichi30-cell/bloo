@@ -24,6 +24,12 @@ export const CUENTA_IVA = "2-1-002"; // IVA por pagar (solo si AppConfig.ivaActi
 // genera costo (pedido de Cris 2026-09-25; las compras históricas se movieron
 // a 5-1-002, ver AuditLog accion='conta.reclasificar').
 export const CUENTA_COMPRAS = "5-1-002"; // Compras de mercadería
+// Insumos que se regalan con la venta (paños de limpieza): gasto operativo,
+// no mercadería (pedido de Cris 2026-09-25). Igual que los exhibidores.
+export const CUENTA_GASTOS_OPERATIVOS = "5-2-001";
+export function esInsumoGasto(nombreModelo: string): boolean {
+  return /pa[ñn]o/i.test(nombreModelo);
+}
 export const CUENTA_CXP = "2-1-001"; // Cuentas por pagar proveedores (ya NO se usa para lotes, ver abajo)
 // Pasivo que abre TODA compra de mercadería: Sara la financia con su tarjeta
 // (regla de Cris 2026-09-25). La 2-1-003 solo se toca de dos maneras: una
