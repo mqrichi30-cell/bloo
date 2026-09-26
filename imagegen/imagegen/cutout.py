@@ -18,13 +18,36 @@ MODEL_NAME = env("IMAGEGEN_REMBG_MODEL", "birefnet-general") or "birefnet-genera
 GATE_MODEL = env("IMAGEGEN_GATE_MODEL", "birefnet-general-lite") or "birefnet-general-lite"
 
 
+# the gate's silhouette is compared at ~320 px; 768 px of input is plenty and keeps buffers small
+GATE_MAX_SIDE = 768
+
+
+def _ort_options():
+    """Memory-lean ONNX Runtime options. The default CPU arena keeps the peak of every inference
+    (several GB for BiRefNet at 1024 px) and each session owns its own: with the cutout and the gate
+    model both loaded that doubled RSS and got the 7 GB GitHub runner OOM-killed."""
+    import os
+
+    import onnxruntime as ort
+
+    so = ort.SessionOptions()
+    so.enable_cpu_mem_arena = False
+    so.enable_mem_pattern = False
+    so.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+    threads = int(env("IMAGEGEN_ORT_THREADS", "0") or 0) or min(4, os.cpu_count() or 2)
+    so.intra_op_num_threads = threads
+    so.inter_op_num_threads = 1
+    return so
+
+
 def _session(name: str | None = None):
+    """One session per model for the whole process (loaded once, reused by every job)."""
     name = name or MODEL_NAME
     if name not in _SESSIONS:
         from rembg import new_session  # heavy import, lazy
 
         log.info("loading rembg model %s (first run downloads weights; U2NET_HOME overrides the dir)", name)
-        _SESSIONS[name] = new_session(name)
+        _SESSIONS[name] = new_session(name, sess_opts=_ort_options())
     return _SESSIONS[name]
 
 
@@ -33,9 +56,9 @@ def segment_alpha(img: Image.Image, model: str | None = None) -> np.ndarray:
     from rembg import remove
 
     work = img.convert("RGB")
-    if max(work.size) > 1280:
+    if max(work.size) > GATE_MAX_SIDE:
         work = work.copy()
-        work.thumbnail((1280, 1280), Image.LANCZOS)
+        work.thumbnail((GATE_MAX_SIDE, GATE_MAX_SIDE), Image.LANCZOS)
     out = remove(work, session=_session(model or GATE_MODEL), only_mask=True)
     a = clean_alpha(np.asarray(out.convert("L")))
     if work.size != img.size:

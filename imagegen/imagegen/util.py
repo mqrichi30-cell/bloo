@@ -88,3 +88,21 @@ def parse_retry_after(value: str | None) -> float | None:
 
 def compact_ts() -> str:
     return now_utc().strftime("%Y%m%dT%H%M%SZ")
+
+
+def mem_info() -> str:
+    """'rss 1234 MB (peak 2345 MB)' for the per-job log line; '' if psutil is unavailable."""
+    try:
+        import psutil
+    except ImportError:
+        return ""
+    mi = psutil.Process().memory_info()
+    peak = getattr(mi, "peak_wset", 0)  # Windows only
+    if not peak:
+        try:
+            import resource  # Linux: ru_maxrss is in KiB
+
+            peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
+        except (ImportError, AttributeError):
+            peak = 0
+    return f"rss {mi.rss >> 20} MB (peak {peak >> 20} MB)" if peak else f"rss {mi.rss >> 20} MB"

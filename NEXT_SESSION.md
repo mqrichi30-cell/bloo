@@ -41,6 +41,17 @@ Disparadores: `bloo-marketplace-tras-reset` (único, se re-arma solo a resetsAt+
 - Respuesta automática (Business Suite → Mensajes → Automatizaciones → Respuesta automática) NO se logró guardar/activar por automatización (UI revierte; posible restricción de Página nueva). Texto en portapapeles de Cris. Reintentar o que Cris la active.
 - Siguiente Meta: app en developers.facebook.com + token de Página + app secret + ANTHROPIC_API_KEY → .env.meta.local → netlify env:set → webhook → App Review.
 
+## 2026-09-25 ~19:30 — DECISIÓN: SIN IA en Messenger
+- Cris NO quiere que la IA conteste después del saludo. Solo saludo fijo (Business Suite → Automatizaciones → Respuesta automática, ACTIVA en Messenger con wa.me/50689433677).
+- App Meta "bloo panel" (3501199170061861) creada y webhook verificado, pero APAGADO a propósito: suscripción de webhook borrada (`{"data":[]}`) y META_PAGE_ACCESS_TOKEN quitado de Netlify. Secretos quedan en C:\bloo\.env.meta.local (gitignored) por si se reactiva. ANTHROPIC key de BlackHawk (AI_API_KEY) da 401 → avisar a Cris que afecta BlackHawk.
+- Fotos: run 36203067787 murió por "shutdown signal" (probable OOM, runner privado 7 GB); tarea Windows falla 0xC000013A. python-imaging-engineer corrigiendo. Verificar que ≥2 fotos pasan a 'lista' y MIRARLAS.
+- Cuando las ~63 hero estén 'lista' y revisadas → escribir TERMINADO arriba (apaga disparadores). Lo demás (conteo Lentes bloo, Uvita) es de Cris y no bloquea.
+
+## 2026-09-25 noche — DECISIONES DE CRIS (cierran pendientes)
+- NO depender de la PC: único worker = GitHub Actions; tarea Windows `bloo-imagegen` se elimina. Las tareas programadas de Claude son solo seguimiento, no parte de la automatización.
+- Uvita material: no importa (queda NULL). Conteo físico: no se hará. Anthropic: no necesario.
+- Pendientes de Cris: NINGUNO. Falta solo: fix OOM nube (python-imaging-engineer en curso) → ≥2 fotos 'lista' revisadas → dejar correr hasta completar las 63 → TERMINADO.
+
 ## Siguiente paso exacto (en orden)
 1. [x] Fix worker verificado (dry-run con plate real HF: lino + producto apoyado + sin marca). Commits locales 2cd5608 + .gitattributes.
 2. [x] Tarea de Windows `bloo-imagegen` cada hora → `C:\bloo\imagegen\run_once.bat` (secretos en imagegen\.env.local). Log: `C:\bloo\imagegen\logs\run.log`.

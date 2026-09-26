@@ -1,18 +1,22 @@
 # bloo product-image worker (imagegen/). Free tiers only; see docs/IMAGE_PROVIDERS.md.
 # Product pixels are cut out locally (BiRefNet) and composited over AI-generated background plates.
+# This is the ONLY worker (no PC runner). Budget: private repo = 2,000 Actions min/month on a
+# 2 vCPU / 7 GB runner; we stay under ~1,500: 4 runs/day x <=12 min (timeout) = 48 min/day worst case
+# (~1,440/month). An idle run exits in the first step (~1 billed minute). ~1 min/job on the edit path,
+# so a 10 min pass does ~9-10 jobs -> ~40 jobs/day, below the ~58/day Cloudflare free edit quota.
 name: imagegen
 
 on:
   schedule:
-    - cron: "17 */4 * * *" # every 4 h (off the :00 rush)
+    - cron: "17 */6 * * *" # every 6 h (off the :00 rush); see budget math above
   workflow_dispatch:
     inputs:
       max_jobs:
         description: "Max jobs this run"
-        default: "12"
+        default: "15"
       max_minutes:
         description: "Time budget (minutes)"
-        default: "20"
+        default: "10"
 
 permissions:
   contents: read
@@ -24,7 +28,7 @@ concurrency:
 jobs:
   imagegen:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 12 # hard cap per run: keeps the monthly minutes budget
     env:
       BLOO_URL: https://bloo-panel.netlify.app
     steps:
@@ -54,9 +58,12 @@ jobs:
           cache: pip
           cache-dependency-path: imagegen/requirements.txt
 
-      - name: Cache rembg / BiRefNet weights
+      # restore/save split: a plain actions/cache only saves on success, so a failed run
+      # re-downloaded ~1.2 GB of weights every time
+      - name: Restore rembg / BiRefNet weights
         if: steps.pending.outputs.count != '0'
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: weights
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.u2net
           key: rembg-${{ vars.IMAGEGEN_REMBG_MODEL || 'birefnet-general' }}-gate-lite-v2
@@ -84,6 +91,19 @@ jobs:
           GEMINI_ALLOW_PAID: ${{ vars.GEMINI_ALLOW_PAID }}
           IMAGEGEN_REMBG_MODEL: ${{ vars.IMAGEGEN_REMBG_MODEL }}
           HF_SPACE_DISABLED: ${{ vars.HF_SPACE_DISABLED }}
-          MAX_JOBS: ${{ github.event.inputs.max_jobs || '12' }}
-          MAX_MINUTES: ${{ github.event.inputs.max_minutes || '20' }}
+          MAX_JOBS: ${{ github.event.inputs.max_jobs || '15' }}
+          MAX_MINUTES: ${{ github.event.inputs.max_minutes || '10' }}
+          IMAGEGEN_FIRST_JOB_SECONDS: "90" # model load + first edit job on 2 vCPU
+          # memory: 7 GB runner; ORT arena is off in code, glibc keeps fewer/trimmed heaps
+          MALLOC_ARENA_MAX: "2"
+          MALLOC_TRIM_THRESHOLD_: "131072"
+          PYTHONUNBUFFERED: "1"
         run: python -m imagegen.run --once --max-jobs "$MAX_JOBS" --max-minutes "$MAX_MINUTES"
+
+      - name: Save rembg / BiRefNet weights
+        if: always() && steps.pending.outputs.count != '0' && steps.weights.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.u2net
+          key: ${{ steps.weights.outputs.cache-primary-key }}
+

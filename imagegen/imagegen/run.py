@@ -1,12 +1,13 @@
 """Entry point: `python -m imagegen.run [--once] [--max-jobs N --max-minutes M] | --next-wait |
 --dry-run --source <file|url> [--plate file] [--cutout file.png]`.
 
-Exit codes (Task Scheduler friendly): 0 = pass finished normally, including "nothing pending" and
+Exit codes (scheduler friendly): 0 = pass finished normally, including "nothing pending" and
 "all providers exhausted, retry later"; 2 = configuration missing; 1 = unexpected crash.
 """
 from __future__ import annotations
 
 import argparse
+import gc
 import math
 import random
 import sys
@@ -28,7 +29,7 @@ from .plates import PlatePool, local_plate, validate_plate
 from .providers import CloudflareEdit, ProviderChain, ProviderError, QuotaExhausted
 from .qa import run_qa
 from .storage import Storage
-from .util import VARIANTS, compact_ts, env, log, now_ts, setup_logging
+from .util import VARIANTS, compact_ts, env, log, mem_info, now_ts, setup_logging
 
 BUCKET = "bloo-marketing"
 PROVIDER_STATE = "state/providers.json"
@@ -167,7 +168,7 @@ def run_worker(max_jobs: int, max_minutes: float, once: bool = False) -> int:
         return 2
     deadline = time.monotonic() + max_minutes * 60
     api = BlooApi(env("BLOO_URL", "https://bloo-panel.netlify.app") or "", env("CRON_SECRET") or "")
-    if once:  # cheap gate before touching Storage / models (Task Scheduler fires often)
+    if once:  # cheap gate before touching Storage / models (the Actions schedule fires often)
         try:
             if api.pending_count() == 0:
                 log.info("nothing pending")
@@ -195,7 +196,9 @@ def run_worker(max_jobs: int, max_minutes: float, once: bool = False) -> int:
         return [v for v in VARIANTS if edit_ok or pool.can_serve(v)]
 
     try:
-        avg = 180.0  # pessimistic first guess (BiRefNet on a CI CPU), refined as jobs finish
+        # first guess of a job's duration (BiRefNet on a CI CPU + model load), refined as jobs finish;
+        # the workflow lowers it so a short Actions budget still gets its first job
+        avg = float(env("IMAGEGEN_FIRST_JOB_SECONDS", "180") or 180)
         while done < max_jobs:
             left = deadline - time.monotonic()
             if left < avg * 1.3:
@@ -237,9 +240,10 @@ def run_worker(max_jobs: int, max_minutes: float, once: bool = False) -> int:
                 api.report(job.image_id, payload)
                 ok += payload["estado"] == "lista"
                 avg = 0.5 * avg + 0.5 * (time.monotonic() - t0) if done > 1 else time.monotonic() - t0
-                log.info("job %s (%s/%s) -> %s%s in %.0fs", job.image_id, job.model_id, job.variant,
+                gc.collect()  # drop the job's image/mask buffers before the next claim
+                log.info("job %s (%s/%s) -> %s%s in %.0fs; %s", job.image_id, job.model_id, job.variant,
                          payload["estado"], f" ({payload['error']})" if payload.get("error") else "",
-                         time.monotonic() - t0)
+                         time.monotonic() - t0, mem_info() or "rss n/a")
                 persist()
     finally:
         persist()
@@ -353,7 +357,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--edit", action="store_true",
                     help="dry-run: call Workers AI FLUX.2 for real (network, ~160 neurons) and gate it")
     ap.add_argument("--once", action="store_true",
-                    help="one bounded pass for Task Scheduler: quick exit if nothing pending; exit 0 unless misconfigured")
+                    help="one bounded pass for the scheduled workflow: quick exit if nothing pending; exit 0 unless misconfigured")
     ap.add_argument("--next-wait", action="store_true", help="print seconds until the next useful run")
     ap.add_argument("-v", "--verbose", action="store_true")
     a = ap.parse_args(argv)
