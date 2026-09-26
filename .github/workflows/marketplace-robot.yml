@@ -1,0 +1,111 @@
+# Robot de Facebook Marketplace (robot/): publica y quita publicaciones de bloo en la cuenta
+# PERSONAL del dueño (aceptó el riesgo de ToS/bloqueo de Meta). UNA tarea por corrida.
+# Presupuesto: 12 corridas/día; una corrida sin tareas sale en el primer paso (~1 min facturado).
+# Secrets: CRON_SECRET, FB_STORAGE_STATE_B64 (se crea con robot/capture-session.mjs). Nunca se imprimen.
+name: marketplace-robot
+
+on:
+  schedule:
+    - cron: "17 */2 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry-run: llena el formulario pero NO publica/confirma"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: marketplace-robot
+  cancel-in-progress: false
+
+jobs:
+  robot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      BLOO_URL: https://bloo-panel.netlify.app
+    steps:
+      # Compuerta barata: sin Node ni navegador si no hay nada que hacer (o la API no existe aún).
+      - name: Check pending tasks
+        id: pending
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          code=$(curl -sS --max-time 30 -o body.json -w '%{http_code}' \
+            -H "x-cron-secret: ${CRON_SECRET}" "${BLOO_URL}/api/robot/pending-count" || echo 000)
+          if [ "$code" != "200" ]; then
+            echo "pending-count HTTP ${code} (API no desplegada o caída) -> salgo"
+            echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          pend=$(jq -r '.pendientes // 0' body.json)
+          paused=$(jq -r '.paused // false' body.json)
+          rm -f body.json
+          echo "pendientes=${pend} paused=${paused}"
+          if [ "$paused" = "true" ] || [ "$pend" = "0" ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout
+        if: steps.pending.outputs.run == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: robot
+          persist-credentials: false
+
+      - name: Set up Node
+        if: steps.pending.outputs.run == 'true'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: robot/package-lock.json
+
+      - name: Install deps
+        if: steps.pending.outputs.run == 'true'
+        working-directory: robot
+        run: npm ci --no-audit --no-fund
+
+      - name: Cache Playwright browsers
+        if: steps.pending.outputs.run == 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: ms-playwright-${{ runner.os }}-${{ hashFiles('robot/package-lock.json') }}
+
+      # Regla del dueño: Google Chrome real (el runner ya lo trae). Chromium solo de respaldo.
+      - name: Ensure browser
+        if: steps.pending.outputs.run == 'true'
+        working-directory: robot
+        run: |
+          if command -v google-chrome >/dev/null 2>&1; then
+            echo "Google Chrome: $(google-chrome --version)"
+          else
+            echo "Google Chrome no está: instalo Chromium de Playwright como respaldo"
+            npx playwright install --with-deps chromium
+          fi
+
+      - name: Run robot (one task)
+        if: steps.pending.outputs.run == 'true'
+        working-directory: robot
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          FB_STORAGE_STATE_B64: ${{ secrets.FB_STORAGE_STATE_B64 }}
+          ROBOT_DRY_RUN: ${{ inputs.dry_run == true && 'true' || 'false' }}
+        run: node run.mjs
+
+      # Solo capturas PNG + un .txt con URL sin query y el error. Nunca storageState ni HTML.
+      - name: Upload failure evidence
+        if: failure() && steps.pending.outputs.run == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: robot-evidence-${{ github.run_id }}
+          path: |
+            robot/artifacts/*.png
+            robot/artifacts/*.txt
+          retention-days: 7
+          if-no-files-found: ignore

@@ -1,0 +1,4 @@
+node_modules/
+artifacts/
+*.storage.json
+fb-session*.json

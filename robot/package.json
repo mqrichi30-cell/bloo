@@ -1,0 +1,15 @@
+{
+  "name": "bloo-marketplace-robot",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node run.mjs",
+    "dry-run": "node run.mjs --dry-run",
+    "lint": "node --check run.mjs && node --check capture-session.mjs && node --check src/api.mjs && node --check src/checkpoint.mjs && node --check src/images.mjs && node --check src/facebook.mjs && node --check src/util.mjs",
+    "test": "node --test test/unit.test.mjs test/flow.test.mjs"
+  },
+  "dependencies": {
+    "playwright": "1.63.0"
+  }
+}

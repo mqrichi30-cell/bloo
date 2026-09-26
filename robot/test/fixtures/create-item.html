@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="es">
+<head><meta charset="utf-8"><title>Crear publicación | Facebook</title>
+<style>[hidden]{display:none!important} .lb{border:1px solid #ccc}</style></head>
+<body>
+<!-- Stub local que imita el formulario real (docs/MARKETPLACE_FORM.md). NO es Facebook. -->
+<main id="step1">
+  <div>0/10 · Agregar fotos <input type="file" multiple accept="image/*,image/heif,image/heic" id="fotos"></div>
+  <label>Título <input type="text" id="titulo"></label>
+  <label>Precio <input type="text" id="precio"></label>
+
+  <div role="combobox" aria-label="Categoría" aria-expanded="false" tabindex="0" id="cat">Categoría</div>
+  <div role="listbox" class="lb" id="catlist" hidden>
+    <div role="option">Herramientas</div>
+    <div role="option">Bolsos y equipaje</div>
+    <div role="option">Joyería y accesorios</div>
+  </div>
+
+  <div role="combobox" aria-label="Estado" aria-expanded="false" tabindex="0" id="estado">Estado</div>
+  <div role="listbox" class="lb" id="estlist" hidden>
+    <div role="option">Nuevo</div>
+    <div role="option">Usado - Como nuevo</div>
+  </div>
+
+  <div role="button" tabindex="0" id="mas">Más detalles</div>
+  <div id="detalles" hidden><label>Descripción <textarea id="desc"></textarea></label></div>
+
+  <label><input type="checkbox" id="promo" checked> Promocionar tras publicar</label>
+  <label><input type="checkbox" id="ocultar"> Ocultar a amigos</label>
+  <button id="sig">Siguiente</button>
+</main>
+<main id="step2" hidden>
+  <p>Publicar en Marketplace</p>
+  <button id="pub">Publicar</button>
+</main>
+<script>
+  const $ = (id) => document.getElementById(id);
+  const state = {};
+  function combo(btn, list, key) {
+    btn.onclick = () => { list.hidden = !list.hidden; };
+    list.querySelectorAll('[role=option]').forEach((o) => o.onclick = () => {
+      state[key] = o.textContent.trim(); btn.textContent = state[key]; list.hidden = true;
+    });
+  }
+  combo($('cat'), $('catlist'), 'categoria');
+  combo($('estado'), $('estlist'), 'estado');
+  $('mas').onclick = () => { $('detalles').hidden = false; };
+  $('sig').onclick = () => {
+    if (!$('titulo').value || !$('precio').value || !state.categoria || !state.estado) return alert('faltan campos');
+    $('step1').hidden = true; $('step2').hidden = false;
+  };
+  $('pub').onclick = async () => {
+    const body = { titulo: $('titulo').value, precio: $('precio').value, descripcion: $('desc').value,
+      fotos: $('fotos').files.length, promo: $('promo').checked, ...state };
+    await fetch('/__submit', { method: 'POST', body: JSON.stringify(body) });
+    location.href = '/marketplace/item/123456/';
+  };
+</script>
+</body>
+</html>
