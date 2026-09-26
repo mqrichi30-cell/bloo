@@ -30,6 +30,17 @@ Disparadores: `bloo-marketplace-tras-reset` (único, se re-arma solo a resetsAt+
 - En curso: python-imaging-engineer (realismo: perspectiva, relight, sombras, bordes, grano, upscale, script requeue) + research-scout (modelos de edición gratis: Cloudflare/HF/IC-Light).
 - Al terminar: mandar a Cris comparativa antes/después (SendUserFile) y preguntar si aprueba → commit+push, `gh workflow enable imagegen.yml`, `Enable-ScheduledTask bloo-imagegen`, correr requeue para regenerar las 60 'lista'.
 
+## 2026-09-25 tarde
+- Estilo nuevo LISTO y en master (ba8bfdc): FLUX.2 klein-4b edita la escena + control de fidelidad + pixeles reales. ~58 ediciones/día gratis (cap 9.500 neuronas). Comparativas enviadas a Cris: imagegen/out/compare/*-compare.jpg.
+- ESPERANDO APROBACIÓN DE CRIS. Si aprueba: `gh workflow enable imagegen.yml -R mqrichi30-cell/bloo`; `Enable-ScheduledTask bloo-imagegen`; `python -m imagegen.requeue --all-lista --apply` (env de imagegen\.env.local). Revisar 2-3 resultados reales.
+- Meta: Página FB "Bloo" creada (id 61594704154063) igual a IG; /privacidad publicada (d31d171). Conectar IG: se pulsó "Conectar", Cris debe confirmar en la ventana emergente. Faltan: app de Meta, token de Página, app secret, ANTHROPIC_API_KEY → C:\bloo\.env.meta.local (gitignored) → netlify env:set; webhook; App Review. META_VERIFY_TOKEN ya en Netlify.
+
+## 2026-09-25 ~18:30
+- Cris APROBÓ estilo nuevo → requeue aplicado (63 hero en cola), workflow + tarea Windows reactivados.
+- Meta: IG @bloo_cr VINCULADO a Página Bloo; WhatsApp +506 8943 3677 conectado + botón agregado. Business Suite: business_id 1687306053008167, asset_id 1321116851091735.
+- Respuesta automática (Business Suite → Mensajes → Automatizaciones → Respuesta automática) NO se logró guardar/activar por automatización (UI revierte; posible restricción de Página nueva). Texto en portapapeles de Cris. Reintentar o que Cris la active.
+- Siguiente Meta: app en developers.facebook.com + token de Página + app secret + ANTHROPIC_API_KEY → .env.meta.local → netlify env:set → webhook → App Review.
+
 ## Siguiente paso exacto (en orden)
 1. [x] Fix worker verificado (dry-run con plate real HF: lino + producto apoyado + sin marca). Commits locales 2cd5608 + .gitattributes.
 2. [x] Tarea de Windows `bloo-imagegen` cada hora → `C:\bloo\imagegen\run_once.bat` (secretos en imagegen\.env.local). Log: `C:\bloo\imagegen\logs\run.log`.

@@ -2,6 +2,7 @@
 // Pública (sin sesión, en PUBLIC_API_PATHS de middleware.ts): la autenticación
 // es la firma X-Hub-Signature-256 con META_APP_SECRET.
 import { NextResponse, type NextRequest } from "next/server";
+import { timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { getMetaConfig } from "@/lib/meta/config";
 import { verifyMetaSignature } from "@/lib/meta/signature";
@@ -14,10 +15,15 @@ export const runtime = "nodejs";
 const MAX_BODY_BYTES = 256 * 1024;
 
 export async function GET(req: NextRequest) {
-  const cfg = getMetaConfig();
-  if (!cfg) return new NextResponse("not configured", { status: 503 });
+  // La verificación de Meta solo necesita META_VERIFY_TOKEN: así el webhook se
+  // puede registrar antes de tener el token de Página y la clave de la app.
+  const verifyToken = process.env.META_VERIFY_TOKEN;
+  if (!verifyToken) return new NextResponse("not configured", { status: 503 });
   const p = req.nextUrl.searchParams;
-  if (p.get("hub.mode") === "subscribe" && p.get("hub.verify_token") === cfg.verifyToken) {
+  const given = Buffer.from(p.get("hub.verify_token") ?? "");
+  const expected = Buffer.from(verifyToken);
+  const tokenOk = given.length === expected.length && timingSafeEqual(given, expected);
+  if (p.get("hub.mode") === "subscribe" && tokenOk) {
     return new NextResponse(p.get("hub.challenge") ?? "", {
       status: 200,
       headers: { "content-type": "text/plain" },
