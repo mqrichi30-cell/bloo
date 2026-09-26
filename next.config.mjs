@@ -10,6 +10,9 @@ const scriptSrc = isDev
   ? "script-src 'self' 'unsafe-eval' 'unsafe-inline'"
   : "script-src 'self' 'unsafe-inline'";
 
+// Fotos de marca (Marketplace) viven en Supabase Storage público.
+const STORAGE_ORIGIN = "https://xwiiwqrvxffafgvzypyd.supabase.co";
+
 const securityHeaders = [
   {
     key: "Content-Security-Policy",
@@ -17,9 +20,9 @@ const securityHeaders = [
       "default-src 'self'",
       scriptSrc,
       "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-      "img-src 'self' data: blob:",
+      `img-src 'self' data: blob: ${STORAGE_ORIGIN}`,
       "font-src 'self' https://fonts.gstatic.com",
-      isDev ? "connect-src 'self' ws:" : "connect-src 'self'",
+      isDev ? `connect-src 'self' ws: ${STORAGE_ORIGIN}` : `connect-src 'self' ${STORAGE_ORIGIN}`,
       "object-src 'none'",
       "base-uri 'self'",
       "form-action 'self'",

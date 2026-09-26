@@ -33,8 +33,9 @@ export function MarketplaceView() {
 
   const load = useCallback(async () => {
     try {
-      const data = await apiFetch<Listing[]>("/api/marketplace/listings");
-      setListings(data);
+      // La API responde { listings: [...] }; se acepta también un arreglo plano.
+      const data = await apiFetch<Listing[] | { listings: Listing[] }>("/api/marketplace/listings");
+      setListings(Array.isArray(data) ? data : data.listings ?? []);
       setError(null);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "No se pudo cargar el Marketplace");
@@ -58,7 +59,7 @@ export function MarketplaceView() {
     try {
       await apiFetch("/api/marketplace/sync", { method: "POST" });
       await load();
-      showToast("Sincronizado con Marketplace", "success");
+      showToast("Inventario revisado", "success");
     } catch (err) {
       showToast(err instanceof ApiError ? err.message : "No se pudo sincronizar", "error");
     } finally {
