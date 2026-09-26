@@ -160,8 +160,11 @@ export function SaldosArbol({
           <div className="flex flex-col gap-1">
             {list.map((c) => {
               const hijas = c.tieneHijas ? hijasDe(c.id) : [];
+              // Los medios de pago (SINPE/Datáfono/Efectivo Sara) NO se listan:
+              // contablemente solo existe la cuenta que los recibe (pedido de
+              // Cris 2026-09-25). Solo se expone la comisión del que la tenga.
               const medios = c.recibeMedios ? mediosDe(c.id) : [];
-              const expandible = hijas.length > 0 || medios.length > 0;
+              const expandible = hijas.length > 0;
               const expanded = expandedId === c.id;
               return (
                 <div key={c.id} className="overflow-hidden rounded-md border border-line-200">
@@ -203,6 +206,14 @@ export function SaldosArbol({
                           {c.esMedioPago ? " · medio de pago" : ""}
                         </p>
                         {c.esMedioPago && <ComisionEditor cuenta={c} onSaved={onCuentaActualizada} />}
+                        {medios
+                          .filter((m) => /dat[aá]fono/i.test(m.nombre))
+                          .map((m) => (
+                            <div key={m.id} className="flex items-center gap-1.5">
+                              <span className="text-caption text-ink-600">Comisión datáfono</span>
+                              <ComisionEditor cuenta={m} onSaved={onCuentaActualizada} />
+                            </div>
+                          ))}
                       </div>
                       <span className="shrink-0 tabular-nums text-data-md text-ink-900">
                         {formatCRC(c.saldoConsolidadoCent)}
@@ -230,21 +241,6 @@ export function SaldosArbol({
                     </div>
                   )}
 
-                  {expanded && medios.length > 0 && (
-                    <div className="flex flex-col divide-y divide-line-200 border-t border-line-200 bg-surface-alt">
-                      {medios.map((m) => (
-                        <div key={m.id} className="flex min-h-12 items-center gap-2 py-2 pl-9 pr-3">
-                          <div className="min-w-0">
-                            <p className="truncate text-body text-ink-900">{m.nombre}</p>
-                            <p className="text-caption text-ink-600">
-                              {m.codigo} · medio de pago, asienta en {c.codigo}
-                            </p>
-                            <ComisionEditor cuenta={m} onSaved={onCuentaActualizada} />
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
                 </div>
               );
             })}

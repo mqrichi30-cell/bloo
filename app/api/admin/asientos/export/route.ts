@@ -122,6 +122,8 @@ export async function GET(request: Request) {
   let totalDebeGlobal = 0;
   let totalHaberGlobal = 0;
   for (const c of cuentas) {
+    // Los alias de medio de pago no son cuentas contables: no van al balance.
+    if (c.esAlias) continue;
     const s = sumsByCuenta.get(c.id);
     const debeCent = s?._sum.debeCent ?? 0;
     const haberCent = s?._sum.haberCent ?? 0;

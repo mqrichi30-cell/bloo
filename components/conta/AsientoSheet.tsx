@@ -21,6 +21,8 @@ export interface CuentaLite {
   // (ver prisma/migrations/20260815010000_cuentas_jerarquia) — así que el
   // selector la filtra antes de que el usuario la pueda elegir.
   tieneHijas?: boolean;
+  // Alias de medio de pago (SINPE/Datáfono Sara): no es cuenta contable.
+  esAlias?: boolean;
 }
 
 interface Linea {
@@ -70,7 +72,7 @@ export function AsientoSheet({
   // Réplica de lib/conta.ts#cuentasSeleccionablesParaAsiento — no se importa
   // ese módulo acá porque arrastraría lib/prisma.ts (@prisma/client) al
   // bundle del navegador; este componente es "use client".
-  const seleccionables = useMemo(() => cuentas.filter((c) => !c.tieneHijas), [cuentas]);
+  const seleccionables = useMemo(() => cuentas.filter((c) => !c.tieneHijas && !c.esAlias), [cuentas]);
 
   const cuentaById = useMemo(() => new Map(seleccionables.map((c) => [c.id, c])), [seleccionables]);
 
