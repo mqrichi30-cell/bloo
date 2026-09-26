@@ -7,7 +7,7 @@ import { verifyCsrf } from "@/lib/csrf";
 import { writeAudit } from "@/lib/audit";
 import { getAppConfig } from "@/lib/config";
 import { costoLoteEnColonesCent } from "@/lib/lote";
-import { CUENTA_CXP, CUENTA_DIFERENCIAL_CAMBIARIO, resolveCuentaCxpDelLote } from "@/lib/conta";
+import { CUENTA_CXP, CUENTA_DIFERENCIAL_CAMBIARIO, resolveCuentaCxpDelLote, resolverPosteo } from "@/lib/conta";
 
 export const dynamic = "force-dynamic";
 
@@ -88,26 +88,23 @@ export async function POST(request: Request) {
     }
   }
 
+  // Medio alias (SINPE/Datáfono/Efectivo Sara) -> su cuenta contable real.
+  const posteo = await resolverPosteo(`Pago de mercadería (lote) con ${medio.nombre}`, [
+    { cuentaId: cxp.id, debeCent: montoCxpCent, haberCent: 0 },
+    { cuentaId: medio.id, debeCent: 0, haberCent: montoPagadoCent },
+    ...(diferencial && diferencialCent > 0 ? [{ cuentaId: diferencial.id, debeCent: diferencialCent, haberCent: 0 }] : []),
+    ...(diferencial && diferencialCent < 0 ? [{ cuentaId: diferencial.id, debeCent: 0, haberCent: -diferencialCent }] : []),
+  ]);
+
   await prisma.$transaction([
     prisma.asiento.create({
       data: {
         fecha: new Date(),
-        glosa: `Pago de mercadería (lote) con ${medio.nombre}`,
+        glosa: posteo.glosa,
         origen: "pago_lote",
         refId: lote.id,
         userId: session.userId!,
-        lineas: {
-          create: [
-            { cuentaId: cxp.id, debeCent: montoCxpCent, haberCent: 0 },
-            { cuentaId: medio.id, debeCent: 0, haberCent: montoPagadoCent },
-            ...(diferencial && diferencialCent > 0
-              ? [{ cuentaId: diferencial.id, debeCent: diferencialCent, haberCent: 0 }]
-              : []),
-            ...(diferencial && diferencialCent < 0
-              ? [{ cuentaId: diferencial.id, debeCent: 0, haberCent: -diferencialCent }]
-              : []),
-          ],
-        },
+        lineas: { create: posteo.lineas },
       },
     }),
     prisma.lote.update({

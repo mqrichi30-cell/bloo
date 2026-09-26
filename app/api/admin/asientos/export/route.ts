@@ -18,6 +18,7 @@ const ORIGEN_LABEL: Record<string, string> = {
   manual: "Manual",
   pago_lote: "Pago mercadería",
   cobro_reserva: "Cobro reserva",
+  reclasificacion: "Reclasificación",
 };
 
 const CURRENCY_FMT = "₡#,##0.00";
@@ -113,9 +114,9 @@ export async function GET(request: Request) {
     { header: "Total Haber", key: "haber", width: 16 },
     { header: "Saldo", key: "saldo", width: 16 },
     // Columna MEMO, a propósito fuera de cualquier total: una cuenta madre
-    // (ej. "Fondos Sara") tiene saldo propio 0 y su plata vive en las hijas.
+    // (con subcuentas) tiene saldo propio 0 y su plata vive en las hijas.
     // Si el consolidado entrara en la columna "Saldo", sumar la columna
-    // contaría a Sara dos veces. Acá se ve el total sin romper el balance.
+    // contaría la madre dos veces. (Sara ya no es madre desde 2026-09-25.) Acá se ve el total sin romper el balance.
     { header: "Saldo consolidado (memo)", key: "consolidado", width: 24 },
   ];
   let totalDebeGlobal = 0;
@@ -128,7 +129,12 @@ export async function GET(request: Request) {
     totalHaberGlobal += haberCent;
     balance.addRow({
       codigo: c.codigo,
-      nombre: c.nombre,
+      // Alias: sus líneas históricas siguen acá (append-only) pero el saldo
+      // ya se trasladó a la cuenta que lo recibe; se aclara para que nadie lo
+      // lea como una cuenta viva en cero.
+      nombre: c.esAlias
+        ? `${c.nombre} (medio de pago -> ${cuentas.find((d) => d.id === c.cuentaContableId)?.codigo ?? "?"})`
+        : c.nombre,
       tipo: TIPO_LABEL[c.tipo] ?? c.tipo,
       naturaleza: NATURALEZA_LABEL[c.naturaleza] ?? c.naturaleza,
       debe: debeCent / 100,

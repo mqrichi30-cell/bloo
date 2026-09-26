@@ -9,7 +9,7 @@ import { getUnitCostByModelCent } from "@/lib/lote";
 import { getAppConfig } from "@/lib/config";
 import { saleSelectFor } from "@/lib/roles";
 import { writeAudit } from "@/lib/audit";
-import { CUENTA_COMISION_DATAFONO, CUENTA_INGRESOS, CUENTA_IVA } from "@/lib/conta";
+import { CUENTA_COMISION_DATAFONO, CUENTA_INGRESOS, CUENTA_IVA, resolverPosteo } from "@/lib/conta";
 import { comisionMedioPagoCent } from "@/lib/comision";
 
 export async function GET(request: Request) {
@@ -215,21 +215,26 @@ export async function POST(request: Request) {
           );
         }
 
+        // SINPE/Datáfono/Efectivo Sara son alias: la línea va a "Cuenta Sara"
+        // y el medio queda en la glosa (lib/conta.ts#resolverPosteo).
+        const posteo = await resolverPosteo(
+          `Venta cobrada con ${medio.nombre}`,
+          [
+            { cuentaId: medio.id, debeCent: cobradoCent - comisionCent, haberCent: 0 },
+            ...(cuentaComision ? [{ cuentaId: cuentaComision.id, debeCent: comisionCent, haberCent: 0 }] : []),
+            { cuentaId: ingresos.id, debeCent: 0, haberCent: baseCent },
+            ...(cuentaIva ? [{ cuentaId: cuentaIva.id, debeCent: 0, haberCent: ivaCent }] : []),
+          ],
+          tx
+        );
         await tx.asiento.create({
           data: {
             fecha: new Date(),
-            glosa: `Venta cobrada con ${medio.nombre}`,
+            glosa: posteo.glosa,
             origen: "venta",
             refId: sale.id,
             userId: session.userId!,
-            lineas: {
-              create: [
-                { cuentaId: medio.id, debeCent: cobradoCent - comisionCent, haberCent: 0 },
-                ...(cuentaComision ? [{ cuentaId: cuentaComision.id, debeCent: comisionCent, haberCent: 0 }] : []),
-                { cuentaId: ingresos.id, debeCent: 0, haberCent: baseCent },
-                ...(cuentaIva ? [{ cuentaId: cuentaIva.id, debeCent: 0, haberCent: ivaCent }] : []),
-              ],
-            },
+            lineas: { create: posteo.lineas },
           },
         });
       }

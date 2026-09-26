@@ -70,6 +70,20 @@ export async function POST(request: Request) {
         { status: 400 }
       );
     }
+    // Una cuenta que ya tiene movimientos (ej. 1-1-100 Cuenta Sara) o que es
+    // alias/destino de medios de pago no puede volverse madre: el trigger
+    // `linea_asiento_validar_cuenta_hoja` bloquearía todo asiento futuro
+    // contra ella y su saldo propio se perdería del consolidado.
+    const [lineasMadre, aliasMadre] = await Promise.all([
+      prisma.lineaAsiento.count({ where: { cuentaId: madre.id } }),
+      prisma.cuenta.count({ where: { cuentaContableId: madre.id } }),
+    ]);
+    if (lineasMadre > 0 || aliasMadre > 0 || madre.cuentaContableId) {
+      return NextResponse.json(
+        { error: "Esa cuenta ya tiene movimientos o recibe medios de pago; no puede tener subcuentas." },
+        { status: 400 }
+      );
+    }
     parentId = madre.id;
     // Una hija hereda el tipo (y por lo tanto la naturaleza) de su madre —
     // se ignora lo que haya elegido el usuario en el picker de tipo.

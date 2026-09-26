@@ -102,13 +102,23 @@ export async function GET(request: Request) {
 
   // "En manos de quién": plata de bloo que hoy tiene cada persona. Se arma de
   // las cuentas de activo raíz que son medio de pago o que agrupan medios de
-  // pago (ej. "Fondos Sara" con SINPE/Datáfono/Efectivo debajo). NO se
+  // pago (madres con subcuentas, o "Cuenta Sara" que recibe SINPE/Datáfono/Efectivo Sara). NO se
   // hardcodean nombres: si mañana se agrega otra cuenta, aparece sola.
   // Se usa el saldo CONSOLIDADO, que en una cuenta madre ya es la suma de sus
   // hijas — por eso las hijas se excluyen, si no se contaría dos veces.
+  // Los medios ALIAS (SINPE/Datáfono/Efectivo Sara) tampoco van: siempre
+  // están en 0 y su plata vive en la cuenta que los recibe ("Cuenta Sara",
+  // que entra por `recibeMedios`). Ver lib/conta.ts#resolverPosteo.
   const cuentas = await cuentasConSaldo();
   const fondos = cuentas
-    .filter((c) => c.tipo === "activo" && !c.parentId && c.activo && (c.esMedioPago || c.tieneHijas))
+    .filter(
+      (c) =>
+        c.tipo === "activo" &&
+        !c.parentId &&
+        !c.esAlias &&
+        c.activo &&
+        (c.esMedioPago || c.tieneHijas || c.recibeMedios)
+    )
     .map((c) => ({ id: c.id, nombre: c.nombre, saldoCent: c.saldoConsolidadoCent }))
     .sort((a, b) => b.saldoCent - a.saldoCent);
 

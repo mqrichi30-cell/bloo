@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { requireValidSession } from "@/lib/session";
 import { verifyCsrf } from "@/lib/csrf";
 import { writeAudit } from "@/lib/audit";
+import { resolverPosteo } from "@/lib/conta";
 
 export const dynamic = "force-dynamic";
 
@@ -49,19 +50,23 @@ export async function POST(request: Request) {
       });
       if (marcada.count !== 1) throw new Error("RESERVA_NO_ACTIVA");
 
+      // Medio alias (SINPE/Datáfono/Efectivo Sara) -> su cuenta contable real.
+      const posteo = await resolverPosteo(
+        `Cobro de reserva con ${medio.nombre}`,
+        [
+          { cuentaId: medio.id, debeCent: montoCent, haberCent: 0 },
+          { cuentaId: ingresos.id, debeCent: 0, haberCent: montoCent },
+        ],
+        tx
+      );
       await tx.asiento.create({
         data: {
           fecha: new Date(),
-          glosa: `Cobro de reserva con ${medio.nombre}`,
+          glosa: posteo.glosa,
           origen: "cobro_reserva",
           refId: reserva.id,
           userId: session.userId!,
-          lineas: {
-            create: [
-              { cuentaId: medio.id, debeCent: montoCent, haberCent: 0 },
-              { cuentaId: ingresos.id, debeCent: 0, haberCent: montoCent },
-            ],
-          },
+          lineas: { create: posteo.lineas },
         },
       });
 

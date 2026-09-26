@@ -20,6 +20,9 @@ interface Cuenta extends CuentaLite {
   parentId: string | null;
   tieneHijas: boolean;
   saldoConsolidadoCent: number;
+  cuentaContableId: string | null;
+  esAlias: boolean;
+  recibeMedios: boolean;
 }
 interface AsientoLinea {
   cuentaCodigo: string;
@@ -39,6 +42,7 @@ interface Asiento {
 const ORIGEN_LABEL: Record<string, string> = {
   pago_lote: "Pago mercadería",
   cobro_reserva: "Cobro reserva",
+  reclasificacion: "Reclasificación",
 };
 
 export function ContaView() {

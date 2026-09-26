@@ -18,6 +18,9 @@ export interface CuentaArbol {
   tieneHijas: boolean;
   saldoCent: number;
   saldoConsolidadoCent: number;
+  cuentaContableId: string | null;
+  esAlias: boolean;
+  recibeMedios: boolean;
 }
 
 /**
@@ -122,6 +125,11 @@ const TIPO_ORDER = ["activo", "pasivo", "patrimonio", "ingreso", "gasto"];
  * tiene hijas, se puede expandir para ver el saldo individual de cada una.
  * Ver requerimiento original: "quiero poder ver la sumatoria de la cuenta de
  * Sara en total o desmenuzada".
+ *
+ * Desde 2026-09-25 "Cuenta Sara" es una sola cuenta (hoja) y SINPE/Datáfono/
+ * Efectivo Sara son medios de pago ALIAS que postean en ella: no se listan
+ * como cuentas (siempre valen 0 y confundirían), sino desplegados bajo la
+ * cuenta que los recibe, sin saldo y con su comisión editable.
  */
 export function SaldosArbol({
   cuentas,
@@ -133,8 +141,9 @@ export function SaldosArbol({
 }) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  const raices = cuentas.filter((c) => !c.parentId);
+  const raices = cuentas.filter((c) => !c.parentId && !c.esAlias);
   const hijasDe = (id: string) => cuentas.filter((c) => c.parentId === id);
+  const mediosDe = (id: string) => cuentas.filter((c) => c.cuentaContableId === id);
   const grupos = TIPO_ORDER.map((tipo) => [tipo, raices.filter((c) => c.tipo === tipo)] as const).filter(
     ([, list]) => list.length > 0
   );
@@ -151,10 +160,12 @@ export function SaldosArbol({
           <div className="flex flex-col gap-1">
             {list.map((c) => {
               const hijas = c.tieneHijas ? hijasDe(c.id) : [];
+              const medios = c.recibeMedios ? mediosDe(c.id) : [];
+              const expandible = hijas.length > 0 || medios.length > 0;
               const expanded = expandedId === c.id;
               return (
                 <div key={c.id} className="overflow-hidden rounded-md border border-line-200">
-                  {c.tieneHijas ? (
+                  {expandible ? (
                     <button
                       type="button"
                       onClick={() => setExpandedId(expanded ? null : c.id)}
@@ -172,7 +183,10 @@ export function SaldosArbol({
                         <span className="min-w-0">
                           <p className="truncate text-body text-ink-900">{c.nombre}</p>
                           <p className="text-caption text-ink-600">
-                            {c.codigo} · {hijas.length} subcuenta{hijas.length === 1 ? "" : "s"}
+                            {c.codigo} ·{" "}
+                            {hijas.length > 0
+                              ? `${hijas.length} subcuenta${hijas.length === 1 ? "" : "s"}`
+                              : `${medios.length} medio${medios.length === 1 ? "" : "s"} de pago`}
                           </p>
                         </span>
                       </span>
@@ -211,6 +225,22 @@ export function SaldosArbol({
                           <span className="shrink-0 tabular-nums text-data-md text-ink-900">
                             {formatCRC(h.saldoCent)}
                           </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {expanded && medios.length > 0 && (
+                    <div className="flex flex-col divide-y divide-line-200 border-t border-line-200 bg-surface-alt">
+                      {medios.map((m) => (
+                        <div key={m.id} className="flex min-h-12 items-center gap-2 py-2 pl-9 pr-3">
+                          <div className="min-w-0">
+                            <p className="truncate text-body text-ink-900">{m.nombre}</p>
+                            <p className="text-caption text-ink-600">
+                              {m.codigo} · medio de pago, asienta en {c.codigo}
+                            </p>
+                            <ComisionEditor cuenta={m} onSaved={onCuentaActualizada} />
+                          </div>
                         </div>
                       ))}
                     </div>

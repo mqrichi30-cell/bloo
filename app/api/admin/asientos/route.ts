@@ -5,7 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { requireValidSession } from "@/lib/session";
 import { verifyCsrf } from "@/lib/csrf";
 import { writeAudit } from "@/lib/audit";
-import { validarAsiento } from "@/lib/conta";
+import { resolverPosteo, validarAsiento } from "@/lib/conta";
 
 export const dynamic = "force-dynamic";
 
@@ -71,13 +71,20 @@ export async function POST(request: Request) {
   const v = validarAsiento(lineas);
   if (!v.ok) return NextResponse.json({ error: v.error }, { status: 400 });
 
+  // Si eligió un medio alias (SINPE/Datáfono/Efectivo Sara), la línea va a
+  // su cuenta contable y el medio queda en la glosa.
+  const posteo = await resolverPosteo(
+    glosa,
+    lineas.map((l) => ({ cuentaId: l.cuentaId, debeCent: l.debeCent, haberCent: l.haberCent }))
+  );
+
   const asiento = await prisma.asiento.create({
     data: {
       fecha: new Date(fecha),
-      glosa,
+      glosa: posteo.glosa,
       origen: "manual",
       userId: g.session!.userId!,
-      lineas: { create: lineas.map((l) => ({ cuentaId: l.cuentaId, debeCent: l.debeCent, haberCent: l.haberCent })) },
+      lineas: { create: posteo.lineas },
     },
   });
   await writeAudit({
@@ -85,7 +92,7 @@ export async function POST(request: Request) {
     accion: "asiento.create",
     entidad: "Asiento",
     entidadId: asiento.id,
-    detalle: { glosa, lineas: lineas.length },
+    detalle: { glosa: posteo.glosa, lineas: lineas.length },
   });
   return NextResponse.json({ id: asiento.id }, { status: 201 });
 }

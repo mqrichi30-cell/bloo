@@ -506,10 +506,25 @@ model Cuenta {
   parent   Cuenta?  @relation("CuentaJerarquia", fields: [parentId], references: [id])
   hijas    Cuenta[] @relation("CuentaJerarquia")
 
+  // Medio de pago ALIAS: si no es null, esta opción se sigue eligiendo al
+  // cobrar/pagar (con su propia comisionBps) pero sus líneas se asientan en
+  // ESA cuenta contable, y el medio queda en la glosa (" · vía SINPE Sara").
+  // Caso real: SINPE/Datáfono/Efectivo Sara → 1-1-100 "Cuenta Sara" (pedido de
+  // Cris 2026-09-25; antes eran subcuentas de una madre). El saldo del alias
+  // es 0 por construcción: el trigger `linea_asiento_validar_no_alias`
+  // rechaza líneas nuevas en un alias y los saldos viejos se trasladaron con
+  // un asiento de reclasificación (append-only, ver
+  // prisma/migrations/20260925000000_cuenta_sara_unificada). El reemplazo lo
+  // hace lib/conta.ts#resolverPosteo en TODOS los puntos que asientan.
+  cuentaContableId String?
+  cuentaContable   Cuenta?  @relation("CuentaAlias", fields: [cuentaContableId], references: [id])
+  alias            Cuenta[] @relation("CuentaAlias")
+
   lineas LineaAsiento[]
 
   @@index([tipo, codigo])
   @@index([parentId])
+  @@index([cuentaContableId])
 }
 
 // Asiento = un movimiento contable con N líneas que CUADRAN (Σdebe = Σhaber).

@@ -96,7 +96,8 @@ export function saldoCent(naturaleza: string, debeCent: number, haberCent: numbe
  *   suma 0 propio, garantizado por el trigger `linea_asiento_validar_cuenta_hoja`).
  * Los dos consumidores existentes (app/api/admin/cuentas/route.ts y
  * app/api/admin/asientos/export/route.ts) siguen recibiendo el mismo array
- * con los mismos campos que antes, solo con estos tres agregados.
+ * con los mismos campos que antes, solo con estos agregados (más `esAlias` /
+ * `recibeMedios`, ver resolverPosteo).
  */
 export async function cuentasConSaldo() {
   const [cuentas, sums] = await Promise.all([
@@ -120,6 +121,8 @@ export async function cuentasConSaldo() {
     return saldoCent(c.naturaleza, s?._sum.debeCent ?? 0, s?._sum.haberCent ?? 0);
   }
 
+  const destinosDeAlias = new Set(cuentas.map((c) => c.cuentaContableId).filter((id): id is string => !!id));
+
   return cuentas.map((c) => {
     const hijaIds = hijaIdsByParent.get(c.id);
     const tieneHijas = !!hijaIds && hijaIds.length > 0;
@@ -127,7 +130,17 @@ export async function cuentasConSaldo() {
     const saldoConsolidadoCent = tieneHijas
       ? hijaIds!.reduce((sum, hijaId) => sum + saldoDeCuenta(cuentaById.get(hijaId)!), 0)
       : propio;
-    return { ...c, saldoCent: propio, tieneHijas, saldoConsolidadoCent };
+    return {
+      ...c,
+      saldoCent: propio,
+      tieneHijas,
+      saldoConsolidadoCent,
+      // Alias = medio de pago que postea en otra cuenta (ver cuentaDePosteo).
+      // Su saldo es 0 por construcción; la UI no lo muestra como cuenta.
+      esAlias: !!c.cuentaContableId,
+      // Cuenta que recibe lo de uno o más alias (hoy: 1-1-100 Cuenta Sara).
+      recibeMedios: destinosDeAlias.has(c.id),
+    };
   });
 }
 
@@ -149,6 +162,44 @@ export type CuentaConSaldo = Awaited<ReturnType<typeof cuentasConSaldo>>[number]
  */
 export function cuentasSeleccionablesParaAsiento<T extends { tieneHijas: boolean }>(cuentas: T[]): T[] {
   return cuentas.filter((c) => !c.tieneHijas);
+}
+
+/**
+ * MEDIOS DE PAGO ALIAS (pedido de Cris 2026-09-25, migración
+ * 20260925000000_cuenta_sara_unificada): "SINPE Sara", "Datáfono Sara" y
+ * "Efectivo Sara" siguen siendo opciones distintas al cobrar (cada una con su
+ * comisionBps), pero toda esa plata cae al mismo saco, así que postean en UNA
+ * cuenta contable: `Cuenta.cuentaContableId` (1-1-100 "Cuenta Sara").
+ *
+ * Esta es la ÚNICA puerta por la que pasan las líneas de un asiento antes de
+ * guardarse (venta, anular venta, pagar lote, cobrar reserva, asiento manual):
+ *  - cambia cada cuenta alias por su cuenta contable destino;
+ *  - agrega " · vía <medio>" a la glosa si no nombra ya al medio, para no
+ *    perder por dónde entró la plata (la línea ya no lo dice).
+ * Si un camino nuevo inserta líneas sin pasar por acá, el trigger
+ * `linea_asiento_validar_no_alias` lo rechaza en la base.
+ */
+export async function resolverPosteo<L extends { cuentaId: string }>(
+  glosa: string,
+  lineas: L[],
+  db: PrismaOrTx = prisma
+): Promise<{ glosa: string; lineas: L[] }> {
+  const ids = Array.from(new Set(lineas.map((l) => l.cuentaId)));
+  const alias = await db.cuenta.findMany({
+    where: { id: { in: ids }, cuentaContableId: { not: null } },
+    select: { id: true, nombre: true, cuentaContableId: true },
+  });
+  if (alias.length === 0) return { glosa, lineas };
+
+  const destino = new Map(alias.map((a) => [a.id, a.cuentaContableId!]));
+  let glosaFinal = glosa;
+  for (const a of alias) {
+    if (!glosaFinal.toLowerCase().includes(a.nombre.toLowerCase())) glosaFinal += ` · vía ${a.nombre}`;
+  }
+  return {
+    glosa: glosaFinal,
+    lineas: lineas.map((l) => ({ ...l, cuentaId: destino.get(l.cuentaId) ?? l.cuentaId })),
+  };
 }
 
 /** Valida un asiento: ≥2 líneas, cada línea con cuenta y exactamente uno de debe/haber>0, y Σdebe=Σhaber. */

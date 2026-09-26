@@ -7,6 +7,7 @@ import { saleAnularSchema } from "@/lib/validation";
 import { saleSelectFor } from "@/lib/roles";
 import { writeAudit } from "@/lib/audit";
 import { SALE_ESTADO_ANULADA } from "@/lib/sale-estado";
+import { resolverPosteo } from "@/lib/conta";
 
 class SaleAnularError extends Error {
   status: number;
@@ -118,20 +119,26 @@ export async function POST(request: Request, { params }: { params: { id: string 
         const asientosReversados: string[] = [];
         if (yaReversados === 0) {
           for (const asiento of asientos) {
+            // Una venta vieja pudo asentar contra un alias (SINPE/Datáfono
+            // Sara, antes de 2026-09-25). Ese saldo ya se trasladó a "Cuenta
+            // Sara", así que el reverso tiene que salir de ahí, no del alias.
+            const posteo = await resolverPosteo(
+              `Reverso: ${asiento.glosa} (venta anulada)`,
+              asiento.lineas.map((l) => ({
+                cuentaId: l.cuentaId,
+                debeCent: l.haberCent,
+                haberCent: l.debeCent,
+              })),
+              tx
+            );
             await tx.asiento.create({
               data: {
                 fecha: new Date(),
-                glosa: `Reverso: ${asiento.glosa} (venta anulada)`,
+                glosa: posteo.glosa,
                 origen: "venta_anulada",
                 refId: sale.id,
                 userId: session.userId!,
-                lineas: {
-                  create: asiento.lineas.map((l) => ({
-                    cuentaId: l.cuentaId,
-                    debeCent: l.haberCent,
-                    haberCent: l.debeCent,
-                  })),
-                },
+                lineas: { create: posteo.lineas },
               },
             });
             asientosReversados.push(asiento.id);
