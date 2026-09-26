@@ -26,7 +26,9 @@ export async function POST(request: Request, { params }: { params: { id: string 
 
   const r = await aplicarResultado(
     idParsed.data,
-    b.status === "hecha" ? { status: "hecha", externalUrl: b.externalUrl } : { status: b.status, error: b.error }
+    b.status === "hecha"
+      ? { status: "hecha", externalUrl: b.externalUrl ?? undefined }
+      : { status: b.status, error: b.error ?? undefined }
   );
   if (!r.ok) return NextResponse.json({ error: r.error }, { status: r.code });
 

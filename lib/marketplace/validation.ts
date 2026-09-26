@@ -79,8 +79,9 @@ export type ImageResult = z.infer<typeof imageResultSchema>;
  *  login o checkpoint: pausa el robot sin gastar intento. */
 export const robotResultSchema = z.object({
   status: z.enum(["hecha", "fallida", "necesita_humano"]),
-  externalUrl: externalUrlSchema.optional(),
-  error: z.string().trim().max(2000).optional(),
+  // nullish: el robot manda null cuando publicó pero no encontró el link.
+  externalUrl: externalUrlSchema.nullish(),
+  error: z.string().trim().max(2000).nullish(),
 });
 export type RobotResult = z.infer<typeof robotResultSchema>;
 
