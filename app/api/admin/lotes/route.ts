@@ -7,7 +7,7 @@ import { loteCreateSchema } from "@/lib/validation";
 import { deriveLoteCostoTotalCent, getTipoCambioUsdCent, computeFechaVencimientoPago } from "@/lib/lote";
 import { getAppConfig } from "@/lib/config";
 import { writeAudit } from "@/lib/audit";
-import { CUENTA_COMPRAS, CUENTA_CXP } from "@/lib/conta";
+import { CUENTA_COMPRAS, CUENTA_CXP_COMPRAS, refIdCompraDeLote } from "@/lib/conta";
 
 /**
  * Lote de compra de inventario, ATADO al modelo que recibe sus unidades
@@ -86,6 +86,7 @@ export async function POST(request: Request) {
     fechaVencimientoPago,
     pagado,
     tipoCambioUsdCentOverride,
+    pedido,
   } = parsed.data;
 
   try {
@@ -123,6 +124,7 @@ export async function POST(request: Request) {
           fecha: fechaLote,
           unidades,
           modelId,
+          pedido: pedido ?? null,
           costoTotalUsdCent,
           costoTotalCent,
           moneda: "USD",
@@ -143,15 +145,20 @@ export async function POST(request: Request) {
         data: { stockQty: { increment: unidades } },
       });
 
-      // ASIENTO AUTOMÁTICO de la compra (partida doble):
-      //   Debe  Costo de mercadería vendida (5-1-001) = costo del lote
-      //   Haber Cuentas por pagar proveedores (2-1-001)
-      // Se asienta SIEMPRE al costo histórico ya calculado arriba
-      // (`costoTotalCent`, TC vigente AL COMPRAR) — nunca se recalcula con el
-      // TC de hoy. Ese es el monto que la CxP debe reflejar como pasivo hasta
-      // que se pague (ver app/api/admin/asientos/pagar-lote/route.ts, que
-      // ahora cierra la CxP contra este mismo monto y separa el diferencial
-      // cambiario en su propia línea).
+      // ASIENTO AUTOMÁTICO de la compra (partida doble), regla de Cris
+      // 2026-09-25 — UN asiento por PEDIDO:
+      //   Debe  Compras de mercadería (5-1-002) = costo de cada lote del pedido
+      //   Haber CxP Sara (2-1-003)              = UNA línea por el total
+      // Con `pedido`: si ya existe el `compra_lote` con refId = pedido (otro
+      // SKU del mismo pedido, o el asiento cargado a mano), se le AGREGA la
+      // línea Debe de este lote y se aumenta su única línea Haber 2-1-003 —
+      // no se abre un segundo asiento. Es la única excepción a "no editar
+      // asientos" y es aditiva: el pedido sigue siendo una sola compra y el
+      // asiento cuadra antes y después (mismo monto a los dos lados).
+      // Sin pedido: un asiento por lote (refId = lote.id), como antes.
+      // Se asienta SIEMPRE al costo histórico (`costoTotalCent`, TC AL
+      // COMPRAR); pagar-lote cierra la CxP contra ese mismo monto y separa el
+      // diferencial cambiario en su propia línea.
       //
       // GAP CONOCIDO — lote creado ya "pagado" desde LoteSheet: hoy
       // `loteCreateSchema` no tiene un `cuentaMedioPagoId` (a diferencia de
@@ -164,25 +171,58 @@ export async function POST(request: Request) {
       // `cuentaMedioPagoId` opcional a `loteCreateSchema` y, si viene, debitar
       // el gasto contra esa cuenta en vez de contra CxP.
       const compras = await tx.cuenta.findUnique({ where: { codigo: CUENTA_COMPRAS } });
-      const cxp = await tx.cuenta.findUnique({ where: { codigo: CUENTA_CXP } });
+      const cxp = await tx.cuenta.findUnique({ where: { codigo: CUENTA_CXP_COMPRAS } });
       if (!compras) throw new LoteError(`Falta la cuenta '${CUENTA_COMPRAS}' (Compras de mercadería).`, 400);
-      if (!cxp) throw new LoteError(`Falta la cuenta '${CUENTA_CXP}' (Cuentas por pagar proveedores).`, 400);
+      if (!cxp) throw new LoteError(`Falta la cuenta '${CUENTA_CXP_COMPRAS}' (Cuentas por pagar — Sara).`, 400);
 
-      await tx.asiento.create({
-        data: {
-          fecha: fechaLote,
-          glosa: `Compra de mercadería (lote, ${unidades} u.)`,
-          origen: "compra_lote",
-          refId: lote.id,
-          userId: session.userId!,
-          lineas: {
-            create: [
-              { cuentaId: compras.id, debeCent: costoTotalCent, haberCent: 0 },
-              { cuentaId: cxp.id, debeCent: 0, haberCent: costoTotalCent },
-            ],
+      const refId = refIdCompraDeLote(lote);
+      if (pedido) {
+        // Serializa altas concurrentes del mismo pedido: sin esto, dos lotes
+        // del mismo pedido a la vez abrirían dos asientos de compra.
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${"compra_lote:" + pedido}))`;
+      }
+      const existente = pedido
+        ? await tx.asiento.findFirst({
+            where: { origen: "compra_lote", refId },
+            orderBy: { fecha: "asc" },
+            include: { lineas: true },
+          })
+        : null;
+
+      if (existente) {
+        const haberes = existente.lineas.filter((l) => l.haberCent > 0);
+        if (haberes.length !== 1 || haberes[0].cuentaId !== cxp.id) {
+          throw new LoteError(
+            `El asiento de compra del pedido ${pedido} no tiene una única línea Haber a '${CUENTA_CXP_COMPRAS}'. Revisalo en /conta antes de sumarle lotes.`,
+            409
+          );
+        }
+        await tx.lineaAsiento.create({
+          data: { asientoId: existente.id, cuentaId: compras.id, debeCent: costoTotalCent, haberCent: 0 },
+        });
+        await tx.lineaAsiento.update({
+          where: { id: haberes[0].id },
+          data: { haberCent: { increment: costoTotalCent } },
+        });
+      } else {
+        await tx.asiento.create({
+          data: {
+            fecha: fechaLote,
+            glosa: pedido
+              ? `Compra Nihao ${pedido} (lote, ${unidades} u.)`
+              : `Compra de mercadería (lote, ${unidades} u.)`,
+            origen: "compra_lote",
+            refId,
+            userId: session.userId!,
+            lineas: {
+              create: [
+                { cuentaId: compras.id, debeCent: costoTotalCent, haberCent: 0 },
+                { cuentaId: cxp.id, debeCent: 0, haberCent: costoTotalCent },
+              ],
+            },
           },
-        },
-      });
+        });
+      }
 
       return lote;
     }, { maxWait: 10000, timeout: 10000 });
@@ -192,7 +232,7 @@ export async function POST(request: Request) {
       accion: "lote.create",
       entidad: "Lote",
       entidadId: result.id,
-      detalle: { modelId, unidades, costoTotalUsdCent, costoTotalCent: result.costoTotalCent },
+      detalle: { modelId, unidades, costoTotalUsdCent, costoTotalCent: result.costoTotalCent, pedido: pedido ?? null },
     });
 
     return NextResponse.json({ lote: result }, { status: 201 });

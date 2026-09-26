@@ -236,23 +236,3 @@ export async function getLowStockModels() {
     take: 10,
   });
 }
-
-/**
- * Pasivo simple para el Panel: lotes de compra aún no pagados. NO es un
- * módulo de cuentas por pagar (sin conciliación, sin pagos parciales, etc.),
- * solo el aviso "Por pagar: $X, vence [fecha]" que pidió Cris.
- */
-export async function getUnpaidLotes() {
-  return prisma.lote.findMany({
-    where: { pagado: false },
-    orderBy: { fechaVencimientoPago: "asc" },
-    select: {
-      id: true,
-      costoTotalUsdCent: true,
-      costoTotalCent: true,
-      medioPago: true,
-      fechaVencimientoPago: true,
-      fecha: true,
-    },
-  });
-}

@@ -1,5 +1,6 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { prisma } from "./prisma";
+import { costoLoteEnColonesCent } from "./lote";
 
 type PrismaOrTx = PrismaClient | Prisma.TransactionClient;
 
@@ -23,7 +24,11 @@ export const CUENTA_IVA = "2-1-002"; // IVA por pagar (solo si AppConfig.ivaActi
 // genera costo (pedido de Cris 2026-09-25; las compras históricas se movieron
 // a 5-1-002, ver AuditLog accion='conta.reclasificar').
 export const CUENTA_COMPRAS = "5-1-002"; // Compras de mercadería
-export const CUENTA_CXP = "2-1-001"; // Cuentas por pagar proveedores
+export const CUENTA_CXP = "2-1-001"; // Cuentas por pagar proveedores (ya NO se usa para lotes, ver abajo)
+// Pasivo que abre TODA compra de mercadería: Sara la financia con su tarjeta
+// (regla de Cris 2026-09-25). La 2-1-003 solo se toca de dos maneras: una
+// COMPRA por pedido (una línea Haber) y un PAGO por pedido (una línea Debe).
+export const CUENTA_CXP_COMPRAS = "2-1-003"; // Cuentas por pagar — Sara (financió con su tarjeta)
 // Diferencial cambiario entre el TC congelado en Lote.costoTotalCent (al
 // comprar) y el TC vigente al momento de pagar (ver lib/lote.ts). Cuenta de
 // gasto (naturaleza deudora): Debe = pérdida cambiaria, Haber = ganancia.
@@ -38,29 +43,44 @@ export const CUENTA_DIFERENCIAL_CAMBIARIO = "5-2-003";
 export const CUENTA_COMISION_DATAFONO = "5-2-002";
 
 /**
- * Qué cuenta se DEBITA al pagar el lote. No se puede hardcodear CUENTA_CXP:
- * el pago tiene que cerrar exactamente el pasivo que abrió la compra, y no
- * todas las compras lo abrieron contra '2-1-001'.
- *
- * Caso real (agosto 2026): los 4 lotes cargados por script acreditaron
- * '2-1-003' (Sara los financió con su tarjeta, no es un proveedor). Con el
- * código viejo, el botón "Registrar pago" del Panel debitaba '2-1-001' —
- * dejaba la CxP real de Sara abierta y creaba un saldo deudor fantasma en
- * proveedores. El asiento cuadraba, así que nada lo hubiera gritado.
- *
- * La fuente de verdad es el asiento `compra_lote` del propio lote: la cuenta
- * que quedó al HABER es, por definición, el pasivo que hay que cancelar. Si
- * hubiera más de una línea al haber (hoy no pasa), gana la de mayor monto.
- * Si no existe el asiento (lote viejo cargado antes del libro diario), cae a
- * CUENTA_CXP como antes. Se autocorrige sin migración ni cambio de UI.
+ * refId de los asientos `compra_lote` / `pago_lote` de un lote: el número de
+ * pedido Nihao si lo tiene (un asiento por PEDIDO, ver Lote.pedido), si no el
+ * id del lote (lote suelto, un asiento por lote como antes).
  */
-export async function resolveCuentaCxpDelLote(
-  loteId: string,
+export function refIdCompraDeLote(lote: { id: string; pedido: string | null }): string {
+  return lote.pedido ?? lote.id;
+}
+
+/**
+ * Estado de la CxP de un pedido (o lote suelto): qué cuenta quedó al HABER en
+ * su(s) asiento(s) `compra_lote`, cuánto se acreditó y cuánto ya se debitó en
+ * `pago_lote` con esos mismos refId. `refIds` incluye el pedido Y los ids de
+ * sus lotes, para cubrir asientos viejos con refId = lote.id.
+ *
+ * Por qué no se hardcodea la cuenta (historia): hasta ago-2026 el pago
+ * debitaba '2-1-001' fijo mientras la compra había acreditado '2-1-003' — el
+ * asiento cuadraba y dejaba abierta la CxP real de Sara. La fuente de verdad es
+ * la línea Haber de mayor monto del asiento de compra. El 25-sep-2026 los
+ * asientos pasaron a refId = pedido y la búsqueda por lote.id dejó de
+ * encontrarlos: caía a '2-1-001' y el pago del pedido 9-sep hubiera debitado
+ * proveedores. Por eso ahora se busca por pedido y el fallback es 2-1-003.
+ *
+ * `compradoCent` es el pasivo histórico (TC del día de compra). Puede ser MAYOR
+ * que la suma de `Lote.costoTotalCent` del pedido: el asiento del 28-jul
+ * incluye exhibidores (5-2-001) que no son lote.
+ */
+export async function estadoCxpPorRefIds(
+  refIds: string[],
   db: PrismaOrTx = prisma
-): Promise<{ id: string; codigo: string } | null> {
-  const compra = await db.asiento.findFirst({
-    where: { origen: "compra_lote", refId: loteId },
-    orderBy: { fecha: "asc" },
+): Promise<{
+  cuenta: { id: string; codigo: string } | null;
+  tieneAsientoCompra: boolean;
+  compradoCent: number;
+  pagadoCent: number;
+  pendienteCent: number;
+}> {
+  const compras = await db.asiento.findMany({
+    where: { origen: "compra_lote", refId: { in: refIds } },
     include: {
       lineas: {
         where: { haberCent: { gt: 0 } },
@@ -69,11 +89,104 @@ export async function resolveCuentaCxpDelLote(
       },
     },
   });
+  const primera = compras.flatMap((a) => a.lineas).sort((a, b) => b.haberCent - a.haberCent)[0];
+  const cuenta =
+    primera?.cuenta ??
+    (await db.cuenta.findUnique({ where: { codigo: CUENTA_CXP_COMPRAS }, select: { id: true, codigo: true } }));
+  if (!cuenta) return { cuenta: null, tieneAsientoCompra: compras.length > 0, compradoCent: 0, pagadoCent: 0, pendienteCent: 0 };
 
-  const cuenta = compra?.lineas[0]?.cuenta;
-  if (cuenta) return cuenta;
+  const compradoCent = compras
+    .flatMap((a) => a.lineas)
+    .filter((l) => l.cuentaId === cuenta.id)
+    .reduce((s, l) => s + l.haberCent, 0);
+  const pagos = await db.lineaAsiento.aggregate({
+    where: { cuentaId: cuenta.id, asiento: { origen: "pago_lote", refId: { in: refIds } } },
+    _sum: { debeCent: true },
+  });
+  const pagadoCent = pagos._sum.debeCent ?? 0;
+  return {
+    cuenta,
+    tieneAsientoCompra: compras.length > 0,
+    compradoCent,
+    pagadoCent,
+    pendienteCent: compradoCent - pagadoCent,
+  };
+}
 
-  return db.cuenta.findUnique({ where: { codigo: CUENTA_CXP }, select: { id: true, codigo: true } });
+/** Qué cuenta se DEBITA al pagar el lote (compat: la usa scripts/verificar-cxp-pagar-lote.ts). */
+export async function resolveCuentaCxpDelLote(
+  loteId: string,
+  db: PrismaOrTx = prisma
+): Promise<{ id: string; codigo: string } | null> {
+  const lote = await db.lote.findUnique({ where: { id: loteId }, select: { id: true, pedido: true } });
+  const refIds = lote?.pedido ? [lote.pedido, loteId] : [loteId];
+  return (await estadoCxpPorRefIds(refIds, db)).cuenta;
+}
+
+export interface PedidoPorPagar {
+  /** Clave de pago: número de pedido, o id del lote si es un lote suelto. */
+  refId: string;
+  pedido: string | null;
+  fecha: Date;
+  loteIds: string[];
+  unidades: number;
+  costoTotalUsdCent: number;
+  medioPago: string;
+  fechaVencimientoPago: Date | null;
+  /** Pasivo histórico pendiente en la CxP (lo que el pago debita). */
+  pendienteCent: number;
+  /** Estimado de lo que sale HOY: lotes al TC vigente + el resto a histórico. */
+  estimadoHoyCent: number;
+}
+
+/**
+ * Lotes no pagados agrupados por pedido (lote suelto = su propio grupo), con
+ * el saldo pendiente real de la CxP de cada grupo. Es lo que ve la UI de
+ * "Registrar pago": se paga el PEDIDO completo, no lote por lote.
+ */
+export async function pedidosPorPagar(tipoCambioUsdCent: number, db: PrismaOrTx = prisma): Promise<PedidoPorPagar[]> {
+  const lotes = await db.lote.findMany({ where: { pagado: false }, orderBy: { fecha: "asc" } });
+  const grupos = new Map<string, typeof lotes>();
+  for (const l of lotes) {
+    const k = refIdCompraDeLote(l);
+    if (!grupos.has(k)) grupos.set(k, []);
+    grupos.get(k)!.push(l);
+  }
+  const out: PedidoPorPagar[] = [];
+  for (const [refId, ls] of Array.from(grupos.entries())) {
+    const estado = await estadoCxpPorRefIds([refId, ...ls.map((l) => l.id)], db);
+    const historicoLotes = ls.reduce((s, l) => s + l.costoTotalCent, 0);
+    // Sin asiento de compra (lote anterior al libro diario): el pasivo es el
+    // costo histórico de los lotes.
+    const pendienteCent = estado.tieneAsientoCompra ? estado.pendienteCent : historicoLotes;
+    const flotanteLotes = ls.reduce(
+      (s, l) =>
+        s +
+        costoLoteEnColonesCent(
+          { costoTotalUsdCent: l.costoTotalUsdCent, pagado: false, tipoCambioPagoCent: null },
+          tipoCambioUsdCent
+        ),
+      0
+    );
+    const vencimientos = ls.map((l) => l.fechaVencimientoPago).filter((d): d is Date => !!d);
+    out.push({
+      refId,
+      pedido: ls[0].pedido,
+      fecha: ls[0].fecha,
+      loteIds: ls.map((l) => l.id),
+      unidades: ls.reduce((s, l) => s + l.unidades, 0),
+      costoTotalUsdCent: ls.reduce((s, l) => s + l.costoTotalUsdCent, 0),
+      medioPago: ls[0].medioPago,
+      fechaVencimientoPago: vencimientos.length ? new Date(Math.min(...vencimientos.map((d) => d.getTime()))) : null,
+      pendienteCent,
+      estimadoHoyCent: flotanteLotes + Math.max(0, pendienteCent - historicoLotes),
+    });
+  }
+  return out.sort(
+    (a, b) =>
+      (a.fechaVencimientoPago?.getTime() ?? Infinity) - (b.fechaVencimientoPago?.getTime() ?? Infinity) ||
+      a.fecha.getTime() - b.fecha.getTime()
+  );
 }
 
 // Naturaleza estándar por tipo (deudora crece con Debe; acreedora con Haber).

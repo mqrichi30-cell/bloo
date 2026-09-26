@@ -17,7 +17,7 @@ import { writeAudit } from "@/lib/audit";
  *
  * OJO CONTABLE: este toggle NO genera ni corrige ningun Asiento -- es una
  * correccion de dato administrativo, no un registro de pago. La unica ruta
- * que cierra la Cuentas por pagar (2-1-001) que abrio la compra del lote es
+ * que cierra la CxP (2-1-003, por pedido) que abrio la compra del lote es
  * POST /api/admin/asientos/pagar-lote. Si alguien marca pagado=true aca en
  * vez de usar esa ruta, la CxP de ese lote queda con saldo para siempre
  * (mismo gap documentado en app/api/admin/lotes/route.ts para lotes que

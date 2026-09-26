@@ -38,6 +38,10 @@ export function LoteSheet({ open, onClose, onSuccess, tipoCambioUsdCent, diaCort
   const [medioPago, setMedioPago] = useState("tarjeta_credito");
   const [fechaVencimientoPago, setFechaVencimientoPago] = useState("");
   const [pagado, setPagado] = useState(false);
+  // Número de orden Nihao: todos los lotes (uno por SKU) del mismo pedido van
+  // a UN asiento de compra y se pagan juntos. Se conserva entre altas seguidas
+  // a propósito (cargar los SKU de un pedido uno tras otro).
+  const [pedido, setPedido] = useState("");
   const [usarOtraTasa, setUsarOtraTasa] = useState(false);
   const [tasaOverrideText, setTasaOverrideText] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -86,6 +90,7 @@ export function LoteSheet({ open, onClose, onSuccess, tipoCambioUsdCent, diaCort
           fechaVencimientoPago: fechaVencimientoPago || undefined,
           pagado,
           tipoCambioUsdCentOverride: tasaOverride,
+          pedido: pedido.trim() || undefined,
         }),
       });
       onClose();
@@ -159,6 +164,23 @@ export function LoteSheet({ open, onClose, onSuccess, tipoCambioUsdCent, diaCort
               </span>
             </div>
           )}
+
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor="lote-pedido" className="text-label text-ink-900">
+              Número de pedido (opcional)
+            </label>
+            <input
+              id="lote-pedido"
+              value={pedido}
+              onChange={(e) => setPedido(e.target.value.toUpperCase())}
+              placeholder="NHCR609092339756"
+              autoCapitalize="characters"
+              className="min-h-[48px] w-full rounded-md border border-line-200 bg-white px-4 text-body text-ink-900 outline-none"
+            />
+            <span className="text-caption text-ink-600">
+              Los lotes del mismo pedido se suman a una sola compra y se pagan juntos.
+            </span>
+          </div>
 
           <div className="flex flex-col gap-1.5">
             <label className="text-label text-ink-900">Medio de pago</label>

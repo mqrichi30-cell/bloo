@@ -228,6 +228,13 @@ model Lote {
   // — este campo se llena una sola vez, al pagar, y ya no cambia después.
   tipoCambioPagoCent   Int?
 
+  // Número de orden Nihao (p. ej. NHCR609092339756). La CxP a Sara (2-1-003)
+  // se abre y se cierra POR PEDIDO (regla de Cris 2026-09-25): todos los lotes
+  // de un pedido comparten UN asiento `compra_lote` y UN `pago_lote`, ambos con
+  // refId = pedido. Null = lote suelto, contabilizado por lote (refId = id).
+  // Migración 20260925120000_lote_pedido (con backfill por fecha).
+  pedido               String?
+
   // SKU que recibió estas unidades. Es lo que permite promediar el costo POR
   // MODELO en vez de globalmente (ver nota de costeo arriba y lib/lote.ts).
   // Nullable solo por compatibilidad con filas anteriores a la migración
@@ -246,6 +253,7 @@ model Lote {
   @@index([fecha])
   @@index([pagado])
   @@index([modelId])
+  @@index([pedido])
 }
 
 // Venta = TICKET (puede incluir varios modelos). Append-only: la fila NUNCA se
@@ -539,7 +547,9 @@ model Asiento {
   //   `refId` apuntan a filas que ya no existen —
   //   ver docs/AUDITORIA_VENTAS_BORRADAS.md).
   origen    String   @default("manual")
-  refId     String? // id del Lote/Reserva/Sale si viene de una plantilla
+  // id del Lote/Reserva/Sale si viene de una plantilla. Para compra_lote /
+  // pago_lote de un lote con `Lote.pedido`, es el número de pedido Nihao.
+  refId     String?
   userId    String
   user      User     @relation(fields: [userId], references: [id])
   createdAt DateTime @default(now())

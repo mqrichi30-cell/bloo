@@ -38,6 +38,20 @@ export const modelCreateSchema = z.object({
 
 export const modelUpdateSchema = modelCreateSchema.partial();
 
+// Número de pedido del proveedor. Se normaliza a mayúsculas sin espacios para
+// que "nhcr 6090…" y "NHCR6090…" no abran dos CxP distintas del mismo pedido.
+// "" = sin pedido.
+export const pedidoSchema = z
+  .string()
+  .transform((s) => s.replace(/\s+/g, "").toUpperCase())
+  .pipe(
+    z.union([
+      z.literal(""),
+      z.string().regex(/^[A-Z0-9-]{4,40}$/, "El número de pedido solo lleva letras, números y guiones"),
+    ])
+  )
+  .transform((s) => (s === "" ? undefined : s));
+
 // Lote de compra de inventario (pooled, global). Reemplaza al viejo
 // purchaseCreateSchema por-modelo/por-costo-unitario.
 export const loteCreateSchema = z.object({
@@ -52,6 +66,9 @@ export const loteCreateSchema = z.object({
   // Tipo de cambio manual solo para ESTE lote (no toca AppConfig). Si se
   // omite, usa el tipo de cambio global vigente al momento de crear el lote.
   tipoCambioUsdCentOverride: z.number().int().positive().max(1_000_000).optional(),
+  // Número de orden Nihao (NHCR…). Si ya hay un asiento de compra de ese
+  // pedido, el lote se suma a él — ver app/api/admin/lotes/route.ts.
+  pedido: pedidoSchema.optional(),
 });
 
 /**

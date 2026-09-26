@@ -10,7 +10,7 @@ import { KPICard } from "@/components/ui/KPICard";
 import { SkeletonBlock } from "@/components/ui/Skeleton";
 import { formatCRC, formatUSD } from "@/lib/money";
 import { apiFetch } from "@/lib/api-client";
-import { PagarLoteSheet } from "@/components/conta/PagarLoteSheet";
+import { PagarLoteSheet, type PedidoPorPagarDTO } from "@/components/conta/PagarLoteSheet";
 
 interface DashboardResponse {
   period: { mode: "month" | "year"; year: number; month: number };
@@ -35,13 +35,8 @@ interface DashboardResponse {
   /** Costo promedio ponderado por producto — reemplaza al viejo costo pooled único. */
   costoPorSku: { modelId: string | null; nombre: string; costoUnitCent: number; unidadesCompradas: number }[];
   lowStock: { id: string; nombre: string; stockQty: number }[];
-  lotesPorPagar: {
-    id: string;
-    costoTotalUsdCent: number;
-    costoTotalCent: number;
-    medioPago: string;
-    fechaVencimientoPago: string | null;
-  }[];
+  /** Pedidos (o lotes sueltos) con CxP pendiente — se pagan completos. */
+  pedidosPorPagar: PedidoPorPagarDTO[];
   tipoCambio: { usdCent: number; fuente: string; actualizado: string | null };
   disclaimer: string;
 }
@@ -64,7 +59,7 @@ export function PanelView() {
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
   const [data, setData] = useState<DashboardResponse | null>(null);
-  const [pagoLote, setPagoLote] = useState<{ id: string; montoCent: number } | null>(null);
+  const [pagoRefId, setPagoRefId] = useState<string | null>(null);
 
   const load = useCallback(() => {
     const params = new URLSearchParams({ mode, year: String(year), month: String(month) });
@@ -190,39 +185,35 @@ export function PanelView() {
           </Link>
 
           <PagarLoteSheet
-            open={!!pagoLote}
-            onClose={() => setPagoLote(null)}
-            loteId={pagoLote?.id ?? null}
-            montoCent={pagoLote?.montoCent ?? 0}
+            open={!!pagoRefId}
+            onClose={() => setPagoRefId(null)}
+            refIdInicial={pagoRefId}
             onPaid={load}
           />
 
-          {data.lotesPorPagar.length > 0 && (
+          {data.pedidosPorPagar.length > 0 && (
             <section className="mx-5 mb-3 rounded-md bg-warn-bg px-4 py-3">
               <h2 className="mb-1 flex items-center gap-1.5 text-label text-warn-text">
                 <CreditCard size={14} /> Por pagar
               </h2>
               <div className="flex flex-col gap-2">
-                {data.lotesPorPagar.map((lote) => (
-                  <div key={lote.id} className="flex items-center justify-between gap-2">
-                    <p className="text-body text-ink-900">
-                      {formatUSD(lote.costoTotalUsdCent)} (
-                      {formatCRC(Math.round((lote.costoTotalUsdCent * data.tipoCambio.usdCent) / 100))} al TC de hoy) ·{" "}
-                      {MEDIO_PAGO_LABEL[lote.medioPago] ?? lote.medioPago}
-                      {lote.fechaVencimientoPago &&
-                        ` · vence ${new Date(lote.fechaVencimientoPago).toLocaleDateString("es-CR", {
-                          day: "numeric",
-                          month: "short",
-                          year: "numeric",
-                        })}`}
+                {data.pedidosPorPagar.map((p) => (
+                  <div key={p.refId} className="flex items-center justify-between gap-2">
+                    <p className="min-w-0 text-body text-ink-900">
+                      <span className="block truncate font-medium">{p.pedido ?? "Lote sin pedido"}</span>
+                      <span className="block text-caption text-ink-600">
+                        {formatCRC(p.pendienteCent)} · {formatUSD(p.costoTotalUsdCent)} (
+                        {formatCRC(p.estimadoHoyCent)} al TC de hoy) · {MEDIO_PAGO_LABEL[p.medioPago] ?? p.medioPago}
+                        {p.fechaVencimientoPago &&
+                          ` · vence ${new Date(p.fechaVencimientoPago).toLocaleDateString("es-CR", {
+                            day: "numeric",
+                            month: "short",
+                            year: "numeric",
+                          })}`}
+                      </span>
                     </p>
                     <button
-                      onClick={() =>
-                        setPagoLote({
-                          id: lote.id,
-                          montoCent: Math.round((lote.costoTotalUsdCent * data.tipoCambio.usdCent) / 100),
-                        })
-                      }
+                      onClick={() => setPagoRefId(p.refId)}
                       className="shrink-0 rounded-sm bg-white px-2.5 py-1.5 text-caption font-medium text-warn-text underline underline-offset-2"
                     >
                       Registrar pago

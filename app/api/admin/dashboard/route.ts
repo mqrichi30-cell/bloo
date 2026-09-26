@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { requireValidSession } from "@/lib/session";
 import { periodQuerySchema } from "@/lib/validation";
 import { getAppConfig } from "@/lib/config";
-import { cuentasConSaldo } from "@/lib/conta";
+import { cuentasConSaldo, pedidosPorPagar } from "@/lib/conta";
 import { refreshTipoCambioIfNeeded } from "@/lib/tipo-cambio-bac";
 import {
   getPeriodRange,
@@ -18,7 +18,6 @@ import {
   buildRankingByModel,
   getCostoUnitarioPorSku,
   getLowStockModels,
-  getUnpaidLotes,
 } from "@/lib/dashboard";
 
 const DISCLAIMER_IVA_OFF =
@@ -64,7 +63,6 @@ export async function GET(request: Request) {
     lotes,
     prevLotes,
     lowStock,
-    lotesPorPagar,
     costoPorSku,
     config,
   ] = await Promise.all([
@@ -74,11 +72,12 @@ export async function GET(request: Request) {
     loadLotesInRange(range),
     loadLotesInRange(prevRange),
     getLowStockModels(),
-    getUnpaidLotes(),
     getCostoUnitarioPorSku(),
     getAppConfig(prisma),
   ]);
   const { ivaActivo, tipoCambioUsdCent } = config;
+  // Por pagar = PEDIDOS (todos sus lotes se pagan juntos), no lotes sueltos.
+  const porPagar = await pedidosPorPagar(tipoCambioUsdCent);
 
   // Utilidad = ventas (ingreso a nivel ticket) - gastos (lotes comprados en el
   // período, reconocidos en Lote.fecha) — YA NO ventas-COGS. Ver lib/dashboard.ts.
@@ -143,7 +142,7 @@ export async function GET(request: Request) {
     ranking,
     costoPorSku,
     lowStock,
-    lotesPorPagar,
+    pedidosPorPagar: porPagar,
     ivaActivo,
     tipoCambio: {
       usdCent: config.tipoCambioUsdCent,
