@@ -86,7 +86,7 @@ export async function POST(request: Request) {
     fechaVencimientoPago,
     pagado,
     tipoCambioUsdCentOverride,
-    pedido,
+    pedido: pedidoInput,
   } = parsed.data;
 
   try {
@@ -98,6 +98,11 @@ export async function POST(request: Request) {
       const costoTotalCent = deriveLoteCostoTotalCent(costoTotalUsdCent, tipoCambioUsdCent);
 
       const fechaLote = fecha ?? new Date();
+      // Para Cris un pedido es TODO lo comprado en una misma fecha (bug
+      // 2026-09-25: sin número de pedido cada SKU abría su propia compra y
+      // la CxP de Sara quedaba partida en varias). Sin número explícito se
+      // reusa el pedido de otro lote de ese mismo día; si no hay, uno por fecha.
+      const pedido = pedidoInput ?? (await pedidoDeLaFecha(tx, fechaLote));
       const medioPagoFinal = medioPago ?? "tarjeta_credito";
       // Tarjeta de crédito: la fecha de pago la define el corte (día fijo,
       // AppConfig.diaCorteTarjeta), NUNCA un valor a mano — ver
@@ -232,7 +237,7 @@ export async function POST(request: Request) {
       accion: "lote.create",
       entidad: "Lote",
       entidadId: result.id,
-      detalle: { modelId, unidades, costoTotalUsdCent, costoTotalCent: result.costoTotalCent, pedido: pedido ?? null },
+      detalle: { modelId, unidades, costoTotalUsdCent, costoTotalCent: result.costoTotalCent, pedido: result.pedido },
     });
 
     return NextResponse.json({ lote: result }, { status: 201 });
@@ -257,4 +262,31 @@ export async function POST(request: Request) {
     }
     throw error;
   }
+}
+
+// Día calendario de Costa Rica (UTC-6, sin horario de verano) en formato YYYY-MM-DD.
+function diaCR(d: Date): string {
+  return new Date(d.getTime() - 6 * 3600 * 1000).toISOString().slice(0, 10);
+}
+
+async function pedidoDeLaFecha(tx: Prisma.TransactionClient, fecha: Date): Promise<string> {
+  const dia = diaCR(fecha);
+  // Los lotes históricos se guardaron a medianoche UTC; los nuevos, a la hora
+  // real. Se buscan ambos: el día CR completo y ese mismo día en UTC.
+  const inicioCR = new Date(`${dia}T06:00:00.000Z`);
+  const finCR = new Date(inicioCR.getTime() + 24 * 3600 * 1000);
+  const inicioUTC = new Date(`${dia}T00:00:00.000Z`);
+  const finUTC = new Date(inicioUTC.getTime() + 24 * 3600 * 1000);
+  const hermano = await tx.lote.findFirst({
+    where: {
+      pedido: { not: null },
+      OR: [
+        { fecha: { gte: inicioCR, lt: finCR } },
+        { fecha: { gte: inicioUTC, lt: finUTC } },
+      ],
+    },
+    orderBy: { fecha: "asc" },
+    select: { pedido: true },
+  });
+  return hermano?.pedido ?? `PEDIDO-${dia}`;
 }

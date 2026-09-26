@@ -178,7 +178,7 @@ export function LoteSheet({ open, onClose, onSuccess, tipoCambioUsdCent, diaCort
               className="min-h-[48px] w-full rounded-md border border-line-200 bg-white px-4 text-body text-ink-900 outline-none"
             />
             <span className="text-caption text-ink-600">
-              Los lotes del mismo pedido se suman a una sola compra y se pagan juntos.
+              Todo lo comprado en la misma fecha es un solo pedido: se suma a una sola compra y se paga junto. Si lo dejás vacío, se agrupa por la fecha.
             </span>
           </div>
 
