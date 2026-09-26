@@ -182,19 +182,87 @@ class EditSceneTests(unittest.TestCase):
         self.assertFalse(meta["attempts"][0]["ok"])
         self.assertTrue(meta["attempts"][1]["ok"])
 
-    def test_two_rejections_fall_back(self) -> None:
+    def test_two_rejections_return_none(self) -> None:
         ed = FakeEditor([self.bad, self.bad])
         with mock.patch.object(run, "segment_alpha", return_value=self.bad_a):
             outs, meta = run.edit_scene(self.cut, "hero", ed)  # type: ignore[arg-type]
         self.assertIsNone(outs)
         self.assertEqual(len(meta["attempts"]), 2)
 
-    def test_quota_falls_back_and_marks_exhausted(self) -> None:
+    def test_quota_returns_none_and_marks_exhausted(self) -> None:
         ed = FakeEditor([QuotaExhausted(123.0, "neurons")])
         outs, meta = run.edit_scene(self.cut, "hero", ed)  # type: ignore[arg-type]
         self.assertIsNone(outs)
         self.assertEqual(ed.exhausted, 123.0)
         self.assertIn("quota", meta["skipped"])
+        self.assertEqual(meta["quota_reset"], 123.0)
+
+
+class ProcessJobEditOnlyTests(unittest.TestCase):
+    """Default (IMAGEGEN_ALLOW_COMPOSITE unset): never composite, never 'lista' without a gated edit."""
+
+    def setUp(self) -> None:
+        env = mock.patch.dict("os.environ", {"IMAGEGEN_ALLOW_COMPOSITE": ""})
+        env.start()
+        self.addCleanup(env.stop)
+        self.job = mock.Mock(image_id="i1", model_id="m1", variant="hero", source_url="https://x/y.jpg")
+        img = Image.new("RGB", (64, 64))
+        hand = mock.Mock(has_hand=False, as_dict=lambda: {})
+        self.storage = mock.Mock(public_url=lambda p: f"https://sb.invalid/{p}")
+        self.pool = mock.Mock()
+        for name, kw in (("load_source", {"return_value": img}),
+                         ("cut_out", {"return_value": (img.convert("RGBA"), hand)}),
+                         ("to_jpeg", {"return_value": b"jpg"})):
+            p = mock.patch.object(run, name, **kw)
+            p.start()
+            self.addCleanup(p.stop)
+        self.composite = mock.patch.object(run, "composite", side_effect=AssertionError("composite called"))
+        self.composite.start()
+        self.addCleanup(self.composite.stop)
+        self.outs = {"1x1": img, "4x5": img}
+
+    def process(self, scene: tuple[Any, dict[str, Any]], qa_failed: list[str] | None = None) -> dict[str, Any]:
+        with mock.patch.object(run, "edit_scene", return_value=scene),                 mock.patch.object(run, "run_qa", return_value={"failed": qa_failed or []}):
+            return run.process_job(self.job, self.pool, self.storage, mock.Mock())
+
+    def test_gate_failed_after_retry_is_error_not_lista(self) -> None:
+        meta = {"path": "edit", "attempts": [{"ok": False}, {"ok": False}]}
+        out = self.process((None, meta))
+        self.assertEqual(out["estado"], "error")
+        self.assertEqual(out["error"], "edit_gate_failed")
+        self.assertEqual(out["retryAfterSeconds"], 3600)
+        self.assertEqual(len(out["qa"]["edit"]["attempts"]), 2)
+        self.pool.acquire.assert_not_called()
+        self.storage.upload.assert_not_called()
+
+    def test_vision_qa_failure_is_edit_gate_failed(self) -> None:
+        out = self.process((self.outs, {"model": "flux-2-klein-4b", "attempts": []}), ["product_differs"])
+        self.assertEqual((out["estado"], out["error"]), ("error", "edit_gate_failed"))
+        self.storage.upload.assert_not_called()
+
+    def test_gated_edit_is_lista_with_cfedit_prefix(self) -> None:
+        out = self.process((self.outs, {"model": "flux-2-klein-4b", "attempts": []}))
+        self.assertEqual(out["estado"], "lista")
+        self.assertEqual(out["provider"], "cfedit:flux-2-klein-4b")
+
+    def test_quota_is_quota_wait(self) -> None:
+        out = self.process((None, {"skipped": "quota: x", "quota_reset": run.now_ts() + 7200}))
+        self.assertEqual(out["error"], run.QUOTA_WAIT)
+        self.assertGreater(out["retryAfterSeconds"], 7000)
+
+    def test_provider_error_is_retried_later(self) -> None:
+        out = self.process((None, {"skipped": "provider error: HTTPError"}))
+        self.assertEqual((out["estado"], out["error"]), ("error", "edit_provider_error"))
+        self.assertIn("retryAfterSeconds", out)
+
+    def test_composite_only_when_opted_in(self) -> None:
+        self.composite.stop()
+        self.pool.acquire.return_value = (Image.new("RGB", (64, 64)), "plates/hero/1-cf-x.jpg")
+        with mock.patch.dict("os.environ", {"IMAGEGEN_ALLOW_COMPOSITE": "1"}),                 mock.patch.object(run, "composite", return_value=Image.new("RGB", (64, 64))):
+            out = self.process((None, {"attempts": [{"ok": False}]}))
+        self.composite.start()
+        self.assertEqual(out["estado"], "lista")
+        self.assertFalse(out["provider"].startswith("cfedit:"))
 
 
 class FakeCursor:

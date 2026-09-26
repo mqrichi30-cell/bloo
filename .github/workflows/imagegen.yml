@@ -1,5 +1,5 @@
 # bloo product-image worker (imagegen/). Free tiers only; see docs/IMAGE_PROVIDERS.md.
-# Product pixels are cut out locally (BiRefNet) and composited over AI-generated background plates.
+# FLUX.2 edit of the real product + local fidelity gate; the plate composite is off unless IMAGEGEN_ALLOW_COMPOSITE=1.
 # This is the ONLY worker (no PC runner). Budget: private repo = 2,000 Actions min/month on a
 # 2 vCPU / 7 GB runner; we stay under ~1,500: 4 runs/day x <=12 min (timeout) = 48 min/day worst case
 # (~1,440/month). An idle run exits in the first step (~1 billed minute). ~1 min/job on the edit path,

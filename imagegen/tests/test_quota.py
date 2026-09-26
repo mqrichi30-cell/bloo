@@ -25,7 +25,8 @@ ZGPU_MSG = ("ZeroGPU quota exceeded: You have exceeded your ZeroGPU quota (90s r
             "Try again in 0:00:00. Authenticate with a Hugging Face token for more quota")
 BASE_ENV = {"CRON_SECRET": "x", "SUPABASE_URL": "http://sb.invalid", "SUPABASE_SERVICE_KEY": "k",
             "HF_TOKEN": "", "TOGETHER_API_KEY": "", "CF_ACCOUNT_ID": "", "CF_API_TOKEN": "",
-            "POLLINATIONS_TOKEN": "", "GEMINI_API_KEY": "", "HF_SPACE_DISABLED": "", "GITHUB_ACTIONS": ""}
+            "POLLINATIONS_TOKEN": "", "GEMINI_API_KEY": "", "HF_SPACE_DISABLED": "", "GITHUB_ACTIONS": "",
+            "IMAGEGEN_ALLOW_COMPOSITE": "1"}  # these tests cover the (opt-in) plate pool
 
 
 class FakeStorage:
@@ -262,6 +263,17 @@ class WorkerTests(Base):
                 mock.patch.object(run, "process_job", side_effect=ValueError("boom")):
             self.run_worker(st, api, "local")
         self.assertEqual(api.reports[0][1]["error"], "ValueError: boom")
+
+
+class EditOnlyWorkerTests(Base):
+    def test_no_claim_without_edit_provider_even_with_cached_plates(self) -> None:
+        st = FakeStorage()
+        st.files["plates/hero/p1.jpg"] = jpeg()
+        api = FakeApi([job(1)])
+        with mock.patch.dict(os.environ, {"IMAGEGEN_ALLOW_COMPOSITE": ""}):
+            self.assertEqual(self.run_worker(st, api, "local"), 0)
+        self.assertEqual(api.claims, 0)
+        self.assertEqual(api.reports, [])
 
 
 if __name__ == "__main__":

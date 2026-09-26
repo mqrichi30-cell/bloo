@@ -58,8 +58,26 @@ def _provider_of(plate_path: str) -> str:
     return parts[1] if len(parts) >= 3 else "cache"
 
 
-EDIT_TRIES = 2  # first seed + one retry with another seed, then the composite fallback
+EDIT_TRIES = 2  # first seed + one retry with another seed; then error (or composite if allowed)
 RESTORE = env("IMAGEGEN_EDIT_RESTORE", "1") != "0"
+EDIT_GATE_FAILED = "edit_gate_failed"  # backend retries later with new seeds (attempts capped at 5)
+EDIT_GATE_RETRY = 3600
+EDIT_PROVIDER_RETRY = 900
+
+
+def composite_allowed() -> bool:
+    """The old plate+cutout composite was rejected by the owner: opt-in only (IMAGEGEN_ALLOW_COMPOSITE=1)."""
+    return env("IMAGEGEN_ALLOW_COMPOSITE", "") == "1"
+
+
+def _next_utc_midnight() -> float:
+    return (math.floor(now_ts() / 86400) + 1) * 86400
+
+
+def _edit_reset(editor: CloudflareEdit) -> float:
+    """When the edit provider comes back: its quota reset if one is set, else the daily ledger reset."""
+    until = editor.exhausted_until()
+    return until if until > now_ts() else _next_utc_midnight()
 
 
 def edit_scene(cut: Image.Image, variant: str, editor: CloudflareEdit | None,
@@ -78,6 +96,7 @@ def edit_scene(cut: Image.Image, variant: str, editor: CloudflareEdit | None,
         except QuotaExhausted as e:
             editor.mark_exhausted(e.reset_at, str(e))
             meta["skipped"] = f"quota: {str(e)[:120]}"
+            meta["quota_reset"] = e.reset_at
             return None, meta
         except (ProviderError, requests.RequestException, KeyError, ValueError, OSError) as e:
             log.warning("edit provider failed: %s", str(e)[:300])
@@ -113,7 +132,11 @@ def process_job(job: Job, pool: PlatePool, storage: Storage,
         qa.update(local=hand.as_dict(), edit=emeta)
         if not set(qa.get("failed", [])) & {"hand_visible", "product_differs", "text_or_logo"}:
             return _upload(job, variant, outs["1x1"], outs["4x5"], storage, qa, f"cfedit:{emeta['model']}")
-        log.info("edit output failed vision QA (%s); falling back to composite", qa.get("failed"))
+        emeta["vision_failed"] = qa.get("failed")
+        log.info("edit output failed vision QA (%s)", qa.get("failed"))
+
+    if not composite_allowed():
+        return _edit_failure(emeta, hand.as_dict())
 
     qa: dict[str, Any] = {}
     qa_retry_used = False
@@ -147,6 +170,19 @@ def process_job(job: Job, pool: PlatePool, storage: Storage,
         return {"estado": "rechazada", "qa": qa, "provider": _provider_of(plate_path)}
 
     return _upload(job, variant, square, portrait, storage, qa, _provider_of(plate_path))
+
+
+def _edit_failure(emeta: dict[str, Any], local: dict[str, Any]) -> dict[str, Any]:
+    """Edit-only mode: never 'lista' without a gated FLUX.2 edit. Quota -> quota_wait (no attempt burned)."""
+    qa = {"local": local, "edit": emeta}
+    if "quota_reset" in emeta:
+        return _quota_wait(float(emeta["quota_reset"]), str(emeta.get("skipped", "edit quota")))
+    skipped = str(emeta.get("skipped", ""))
+    if skipped.startswith("no edit provider"):  # budget spent mid-run: the neuron ledger resets daily
+        return _quota_wait(_next_utc_midnight(), skipped)
+    if skipped.startswith("provider error"):
+        return _err("edit_provider_error", retryAfterSeconds=EDIT_PROVIDER_RETRY, qa=qa)
+    return _err(EDIT_GATE_FAILED, retryAfterSeconds=EDIT_GATE_RETRY, qa=qa)
 
 
 def _upload(job: Job, variant: str, square: Image.Image, portrait: Image.Image, storage: Storage,
@@ -193,6 +229,8 @@ def run_worker(max_jobs: int, max_minutes: float, once: bool = False) -> int:
 
     def servable() -> list[str]:
         edit_ok = editor.available()
+        if not composite_allowed():
+            return list(VARIANTS) if edit_ok else []
         return [v for v in VARIANTS if edit_ok or pool.can_serve(v)]
 
     try:
@@ -206,8 +244,8 @@ def run_worker(max_jobs: int, max_minutes: float, once: bool = False) -> int:
                 break
             can = servable()  # never claim unless some plate can actually be obtained
             if not can:
-                exhausted_until = chain.earliest_reset()
-                log.info("no cached plate and no provider available; not claiming")
+                exhausted_until = chain.earliest_reset() if composite_allowed() else _edit_reset(editor)
+                log.info("no edit provider (or cached plate) available; not claiming")
                 break
             jobs = api.claim(1)  # one at a time: never hold claims we cannot finish
             if not jobs:
@@ -221,7 +259,7 @@ def run_worker(max_jobs: int, max_minutes: float, once: bool = False) -> int:
                     continue
                 seen.add(job.image_id)
                 if variant not in can:
-                    reset = chain.earliest_reset()
+                    reset = chain.earliest_reset() if composite_allowed() else _edit_reset(editor)
                     api.report(job.image_id, _quota_wait(reset, f"no plate for variant {variant}"))
                     log.info("job %s (%s) -> quota_wait: no plate for %s", job.image_id, job.model_id, variant)
                     continue
@@ -248,7 +286,7 @@ def run_worker(max_jobs: int, max_minutes: float, once: bool = False) -> int:
     finally:
         persist()
     if exhausted_until is not None:
-        log.warning("no plate source left; earliest provider reset in %ds", int(exhausted_until - now_ts()))
+        log.warning("no image source left; earliest provider reset in %ds", int(exhausted_until - now_ts()))
     log.info("done: %d processed, %d lista", done, ok)
     return 0
 
