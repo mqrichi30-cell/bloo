@@ -48,6 +48,12 @@ export const TASK_ABIERTAS: TaskStatus[] = ["pendiente", "en_proceso"];
 
 export const ROBOT_MAX_ATTEMPTS = 3;
 export const ROBOT_LEASE_MINUTES = 30;
+/** Ritmo del dueño: como máximo UNA tarea ejecutada ('hecha', publicar o
+ *  quitar, por doneAt) cada 110 min. Se aplica en el servidor porque el cron
+ *  de GitHub descarta corridas y el Action se agenda más seguido: el ritmo no
+ *  puede depender de cuántas corridas lleguen. Fallidas no cuentan (no
+ *  llegaron a Facebook). */
+export const ROBOT_PACING_MINUTES = 110;
 /** Tope de fotos por publicación que se le pasan al robot. */
 const MAX_IMAGENES = 10;
 
@@ -218,6 +224,28 @@ export async function contarPendientes(): Promise<number> {
   return prisma.marketplaceTask.count({ where: { status: "pendiente", attempts: { lt: ROBOT_MAX_ATTEMPTS } } });
 }
 
+/** Pendientes que se podrían repartir ya (no esperan foto). */
+export async function contarListas(): Promise<number> {
+  const rows = await prisma.$queryRaw<{ n: number }[]>`
+    SELECT COUNT(*)::int AS n FROM ${SCHEMA}."MarketplaceTask" q
+     WHERE q."status" = 'pendiente' AND q."attempts" < ${ROBOT_MAX_ATTEMPTS} AND NOT (${ESPERANDO_FOTO})`;
+  return rows[0]?.n ?? 0;
+}
+
+/** Cuándo se puede ejecutar la próxima tarea según el ritmo (null = ya). */
+export async function proximaHabilitada(
+  db: Prisma.TransactionClient | typeof prisma = prisma
+): Promise<Date | null> {
+  const ultima = await db.marketplaceTask.findFirst({
+    where: { status: "hecha", doneAt: { not: null } },
+    orderBy: { doneAt: "desc" },
+    select: { doneAt: true },
+  });
+  if (!ultima?.doneAt) return null;
+  const next = new Date(ultima.doneAt.getTime() + ROBOT_PACING_MINUTES * 60_000);
+  return next.getTime() > Date.now() ? next : null;
+}
+
 /** Pendientes que no se reparten todavía porque su hero se está regenerando. */
 export async function contarEsperandoFotos(): Promise<number> {
   const rows = await prisma.$queryRaw<{ n: number }[]>`
@@ -247,9 +275,19 @@ interface TareaReclamada {
  * tiene una tarea con lease vigente devuelve { ocupado: true } sin reclamar:
  * nunca dos navegadores sobre la misma cuenta de Facebook.
  */
-export async function reclamarSiguiente(): Promise<{ tarea: TareaReclamada | null; ocupado: boolean }> {
+export async function reclamarSiguiente(): Promise<{
+  tarea: TareaReclamada | null;
+  ocupado: boolean;
+  /** Fijado = no toca todavía por el ritmo de 110 min; no se reclamó nada. */
+  nextDueAt: Date | null;
+}> {
   return prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(${LOCK_KEY})`;
+
+    // Bajo el mismo lock que el claim: dos corridas solapadas no pueden
+    // pasar las dos el control de ritmo.
+    const nextDueAt = await proximaHabilitada(tx);
+    if (nextDueAt) return { tarea: null, ocupado: false, nextDueAt };
 
     await tx.$executeRaw`
       UPDATE ${SCHEMA}."MarketplaceTask"
@@ -264,7 +302,7 @@ export async function reclamarSiguiente(): Promise<{ tarea: TareaReclamada | nul
     const vigentes = await tx.$queryRaw<{ n: number }[]>`
       SELECT COUNT(*)::int AS n FROM ${SCHEMA}."MarketplaceTask"
        WHERE "status" = 'en_proceso' AND "lockedUntil" >= ${AHORA}`;
-    if ((vigentes[0]?.n ?? 0) > 0) return { tarea: null, ocupado: true };
+    if ((vigentes[0]?.n ?? 0) > 0) return { tarea: null, ocupado: true, nextDueAt: null };
 
     const filas = await tx.$queryRaw<TareaReclamada[]>`
       UPDATE ${SCHEMA}."MarketplaceTask" AS t
@@ -280,7 +318,7 @@ export async function reclamarSiguiente(): Promise<{ tarea: TareaReclamada | nul
           FOR UPDATE SKIP LOCKED
        )
       RETURNING t."id", t."listingId", t."action", t."externalUrl"`;
-    return { tarea: filas[0] ?? null, ocupado: false };
+    return { tarea: filas[0] ?? null, ocupado: false, nextDueAt: null };
   });
 }
 

@@ -10,6 +10,7 @@
 //   { task: null, pendientes, esperandoFotos }    — solo quedan 'publicar' con
 //                                                   el hero regenerándose
 //   { task: null, ocupado: true, pendientes }     — otra corrida tiene lease vigente
+//   { task: null, espera: true, nextDueAt }       — ritmo: hubo una 'hecha' hace < 110 min
 //   { task: { id, action, listingId, externalUrl, kit, images } }
 import { NextResponse } from "next/server";
 import { requireCronSecret } from "@/lib/marketplace/cron-auth";
@@ -38,7 +39,10 @@ export async function POST(request: Request) {
     const estado = await estadoRobot();
     if (estado.pausado) return NextResponse.json({ paused: true, motivo: estado.motivo });
 
-    const { tarea, ocupado } = await reclamarSiguiente();
+    const { tarea, ocupado, nextDueAt } = await reclamarSiguiente();
+    if (nextDueAt) {
+      return NextResponse.json({ task: null, espera: true, nextDueAt: nextDueAt.toISOString() });
+    }
     if (!tarea) {
       const [pendientes, esperandoFotos] = await Promise.all([contarPendientes(), contarEsperandoFotos()]);
       return NextResponse.json({
