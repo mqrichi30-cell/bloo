@@ -6,7 +6,7 @@
 Inventario de lentes → anuncio por color en pestaña Market (kit 1-toque, Marketplace no tiene API en CR) + 3 fotos de marca por color generadas gratis (recorte real del producto + fondo IA) + auto-reply Messenger. Todo debe correr solo, sin la PC de Cris ni tokens de Claude.
 
 ## Estado (verificado)
-EN CURSO  ← cambiar a "TERMINADO" solo cuando todo esté cumplido y verificado (apaga los disparadores).
+TERMINADO (2026-09-26): automatización 100% en la nube y verificada. Disparadores de Claude desactivados.
 
 Disparadores: `bloo-marketplace-tras-reset` (único, se re-arma solo a resetsAt+3min del límite 5h) + `bloo-marketplace-continuar` (cada 3h, también re-arma el anterior).
 
@@ -76,3 +76,8 @@ Disparadores: `bloo-marketplace-tras-reset` (único, se re-arma solo a resetsAt+
 - No publicar imágenes con marca de agua, mano o producto flotando.
 - No usar Gemini imagen (pago) salvo GEMINI_ALLOW_PAID=1.
 - No imprimir secretos. No push sin credenciales de Cris.
+
+## CIERRE 2026-09-26
+- Run 36209946134: 8/8 fotos 'lista' sin shutdown (pico ~7,6 GB reportado, estable). Revisadas 2 a ojo: OK.
+- Resto de las 63 hero sale solo: workflow cada 6 h (~40/día) + sync diario Netlify 7am. No depende de la PC ni de Claude.
+- Si algo falla: `gh run list -R mqrichi30-cell/bloo` y `SELECT estado,count(*) FROM bloo."GeneratedImage" GROUP BY 1`.
