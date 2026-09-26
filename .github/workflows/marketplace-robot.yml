@@ -6,7 +6,9 @@ name: marketplace-robot
 
 on:
   schedule:
-    - cron: "17 */2 * * *"
+    # GitHub descarta muchos cron; se intenta cada hora y el servidor
+    # impone el ritmo real (1 tarea cada ~2 h) con el campo "due".
+    - cron: "17 * * * *"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -42,9 +44,11 @@ jobs:
           fi
           pend=$(jq -r '.pendientes // 0' body.json)
           paused=$(jq -r '.paused // false' body.json)
+          due=$(jq -r '.due // false' body.json)
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then due=true; fi
           rm -f body.json
-          echo "pendientes=${pend} paused=${paused}"
-          if [ "$paused" = "true" ] || [ "$pend" = "0" ]; then
+          echo "pendientes=${pend} paused=${paused} due=${due}"
+          if [ "$paused" = "true" ] || [ "$pend" = "0" ] || [ "$due" != "true" ]; then
             echo "run=false" >> "$GITHUB_OUTPUT"
           else
             echo "run=true" >> "$GITHUB_OUTPUT"
