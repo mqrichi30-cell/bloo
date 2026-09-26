@@ -69,7 +69,7 @@ async function main() {
   }
   const task = claim?.task;
   if (!task) {
-    log("sin tareas pendientes");
+    log(/** @type {any} */ (claim)?.ocupado ? "hay una tarea tomada por otra corrida (lock activo); salgo" : "sin tareas pendientes");
     return 0;
   }
   log(`tarea ${task.id}: ${task.action}${dryRun ? " (dry-run)" : ""}`);
