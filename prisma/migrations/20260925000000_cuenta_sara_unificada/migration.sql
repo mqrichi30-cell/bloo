@@ -12,7 +12,7 @@
 --   * 1-1-101/102/103 siguen existiendo como MEDIOS DE PAGO (selector de
 --     venta / pagar lote / cobrar reserva / asiento manual, y 102 con su
 --     comisionBps), pero con `cuentaContableId` = 1-1-100: el servidor postea
---     en esa cuenta (lib/conta.ts#cuentaDePosteo) y deja el medio en la glosa
+--     en esa cuenta (lib/conta.ts#resolverPosteo) y deja el medio en la glosa
 --     (" · vía SINPE Sara").
 --
 -- APPEND-ONLY: las líneas históricas NO se mueven ni se reescriben sus glosas.
@@ -112,7 +112,7 @@ CREATE OR REPLACE FUNCTION "bloo"."linea_asiento_validar_no_alias"()
 RETURNS TRIGGER AS $$
 BEGIN
   IF EXISTS (SELECT 1 FROM "bloo"."Cuenta" WHERE "id" = NEW."cuentaId" AND "cuentaContableId" IS NOT NULL) THEN
-    RAISE EXCEPTION 'Esa cuenta es un medio de pago que postea en otra cuenta contable; asentá contra esa (ver lib/conta.ts#cuentaDePosteo).';
+    RAISE EXCEPTION 'Esa cuenta es un medio de pago que postea en otra cuenta contable; asentá contra esa (ver lib/conta.ts#resolverPosteo).';
   END IF;
   RETURN NEW;
 END;
