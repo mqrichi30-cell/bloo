@@ -62,7 +62,7 @@ export async function PATCH(request: Request, { params }: { params: { id: string
           stockReservado: true,
           fotoUrl: true,
           nihaoVariants: { select: { imageUrl: true, disponible: true }, orderBy: { createdAt: "desc" } },
-          generatedImages: { select: { variant: true, estado: true } },
+          generatedImages: { select: { variant: true, estado: true, provider: true } },
         },
       },
     },

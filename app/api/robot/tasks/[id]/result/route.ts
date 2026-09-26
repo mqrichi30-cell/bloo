@@ -1,6 +1,6 @@
 // POST /api/robot/tasks/[id]/result — el robot reporta cómo le fue con la
 // tarea que reclamó. Body: { status: "hecha" | "fallida" | "necesita_humano",
-// externalUrl?, error? }. Solo se acepta sobre tareas en_proceso (409 si no).
+// externalUrl?, error?, dryRun? }. dryRun:true solo libera el lease. Solo se acepta sobre tareas en_proceso (409 si no).
 // Lógica en lib/marketplace/tasks.ts#aplicarResultado.
 import { NextResponse } from "next/server";
 import { writeAudit } from "@/lib/audit";
@@ -23,17 +23,20 @@ export async function POST(request: Request, { params }: { params: { id: string 
     return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "Datos inválidos" }, { status: 400 });
   }
   const b = parsed.data;
+  const status = b.dryRun ? "dry_run" : b.status ?? "fallida"; // el refine garantiza status si no es dryRun
 
   const r = await aplicarResultado(
     idParsed.data,
-    b.status === "hecha"
-      ? { status: "hecha", externalUrl: b.externalUrl ?? undefined }
-      : { status: b.status, error: b.error ?? undefined }
+    status === "dry_run"
+      ? { status: "dry_run" }
+      : status === "hecha"
+        ? { status: "hecha", externalUrl: b.externalUrl ?? undefined }
+        : { status, error: b.error ?? undefined }
   );
   if (!r.ok) return NextResponse.json({ error: r.error }, { status: r.code });
 
   await writeAudit({
-    accion: `robot.${b.status}`,
+    accion: `robot.${status}`,
     entidad: "MarketplaceTask",
     entidadId: r.task.id,
     detalle: {
@@ -51,7 +54,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
   return NextResponse.json({
     ok: true,
     task: r.task,
-    paused: b.status === "necesita_humano",
+    paused: status === "necesita_humano",
     listingMovido: r.listingMovido,
     listingTransicion: r.transicion,
   });

@@ -78,7 +78,7 @@ export async function runMarketplaceSync(opts: {
       stockReservado: true,
       fotoUrl: true,
       nihaoVariants: { select: { imageUrl: true, disponible: true }, orderBy: { createdAt: "desc" } },
-      generatedImages: { select: { variant: true, estado: true } },
+      generatedImages: { select: { variant: true, estado: true, provider: true } },
       channelListings: {
         where: { canal: CANAL_MARKETPLACE },
         select: { id: true, status: true, lastStockSeen: true },

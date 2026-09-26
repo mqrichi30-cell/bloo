@@ -5,7 +5,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireValidSession } from "@/lib/session";
 import { renderKit, kitHash } from "@/lib/marketplace/kit";
-import { CANAL_MARKETPLACE, IMAGE_VARIANTS, type ListingStatus } from "@/lib/marketplace/status";
+import { CANAL_MARKETPLACE, IMAGE_VARIANTS, esEstiloNuevo, type ListingStatus } from "@/lib/marketplace/status";
 
 export const dynamic = "force-dynamic";
 
@@ -41,7 +41,15 @@ export async function GET() {
           stockReservado: true,
           generatedImages: {
             where: { estado: { not: "rechazada" } },
-            select: { id: true, variant: true, estado: true, publicUrl: true, portraitUrl: true, createdAt: true },
+            select: {
+              id: true,
+              variant: true,
+              estado: true,
+              provider: true,
+              publicUrl: true,
+              portraitUrl: true,
+              createdAt: true,
+            },
             orderBy: { createdAt: "desc" },
           },
         },
@@ -54,16 +62,21 @@ export async function GET() {
     const agotado = l.status === "agotado_marcar_vendido" || l.status === "vendido";
     const kitInput = { nombre: m.nombre, color: m.color, material: m.material, precioVentaCent: m.precioVentaCent };
     const kit = renderKit(kitInput, { agotado });
-    // La más reciente no rechazada de cada variante (regenerar deja la vieja
-    // en 'rechazada', así que normalmente hay una sola). Durante una
-    // regeneración en bloque conviven la vieja 'lista' y la nueva pendiente:
-    // se muestra la 'lista' hasta que la nueva termine.
+    // Por variante: la 'lista' de estilo NUEVO (esEstiloNuevo, status.ts);
+    // si no hay, la que se está generando (pendiente/generando/error). Una
+    // 'lista' de estilo VIEJO nunca se muestra como foto para publicar (el
+    // dueño rechazó ese estilo): si es lo único que hay, se informa como
+    // 'rechazada' SIN url, para que el panel ofrezca "Regenerar" con su id.
     const images = IMAGE_VARIANTS.flatMap((v) => {
-      const img =
-        m.generatedImages.find((i) => i.variant === v && i.estado === "lista") ??
-        m.generatedImages.find((i) => i.variant === v);
-      return img
-        ? [{ id: img.id, variant: img.variant, estado: img.estado, publicUrl: img.publicUrl, portraitUrl: img.portraitUrl }]
+      const nueva = m.generatedImages.find((i) => i.variant === v && i.estado === "lista" && esEstiloNuevo(i.provider));
+      const enCurso = m.generatedImages.find((i) => i.variant === v && i.estado !== "lista");
+      const vieja = m.generatedImages.find((i) => i.variant === v && i.estado === "lista");
+      const img = nueva ?? enCurso;
+      if (img) {
+        return [{ id: img.id, variant: img.variant, estado: img.estado, publicUrl: img.publicUrl, portraitUrl: img.portraitUrl }];
+      }
+      return vieja
+        ? [{ id: vieja.id, variant: vieja.variant, estado: "rechazada", publicUrl: null, portraitUrl: null }]
         : [];
     });
     return {

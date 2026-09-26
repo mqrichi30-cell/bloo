@@ -7,13 +7,21 @@
 // Respuestas:
 //   { paused: true, motivo }                      — Cris tiene que reanudar
 //   { task: null, pendientes: 0 }                 — cola vacía
+//   { task: null, pendientes, esperandoFotos }    — solo quedan 'publicar' con
+//                                                   el hero regenerándose
 //   { task: null, ocupado: true, pendientes }     — otra corrida tiene lease vigente
 //   { task: { id, action, listingId, externalUrl, kit, images } }
 import { NextResponse } from "next/server";
 import { requireCronSecret } from "@/lib/marketplace/cron-auth";
 import { runMarketplaceSync } from "@/lib/marketplace/sync";
 import { writeAudit } from "@/lib/audit";
-import { armarPayload, contarPendientes, estadoRobot, reclamarSiguiente } from "@/lib/marketplace/tasks";
+import {
+  armarPayload,
+  contarEsperandoFotos,
+  contarPendientes,
+  estadoRobot,
+  reclamarSiguiente,
+} from "@/lib/marketplace/tasks";
 
 export const dynamic = "force-dynamic";
 
@@ -32,9 +40,11 @@ export async function POST(request: Request) {
 
     const { tarea, ocupado } = await reclamarSiguiente();
     if (!tarea) {
+      const [pendientes, esperandoFotos] = await Promise.all([contarPendientes(), contarEsperandoFotos()]);
       return NextResponse.json({
         task: null,
-        pendientes: await contarPendientes(),
+        pendientes,
+        ...(esperandoFotos > 0 ? { esperandoFotos } : {}),
         ...(ocupado ? { ocupado: true } : {}),
       });
     }

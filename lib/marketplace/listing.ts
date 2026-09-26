@@ -4,6 +4,7 @@
 import type { Prisma } from "@prisma/client";
 import {
   CANAL_MARKETPLACE,
+  esEstiloNuevo,
   isListingStatus,
   siguienteStatus,
   type ListingContexto,
@@ -47,11 +48,11 @@ export function elegirSourceUrl(
 
 export function contextoDe(
   model: { activo: boolean; tipo: string; stockQty: number; stockReservado: number },
-  imagenes: { variant: string; estado: string }[]
+  imagenes: { variant: string; estado: string; provider: string | null }[]
 ): ListingContexto {
   return {
     available: model.stockQty - model.stockReservado,
-    heroLista: imagenes.some((i) => i.variant === "hero" && i.estado === "lista"),
+    heroLista: imagenes.some((i) => i.variant === "hero" && i.estado === "lista" && esEstiloNuevo(i.provider)),
     elegible: model.activo && model.tipo === "lente",
   };
 }
@@ -81,7 +82,7 @@ export async function reevaluarListing(
           tipo: true,
           stockQty: true,
           stockReservado: true,
-          generatedImages: { select: { variant: true, estado: true } },
+          generatedImages: { select: { variant: true, estado: true, provider: true } },
         },
       },
     },

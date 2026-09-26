@@ -30,7 +30,15 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { renderKit, kitHash } from "./kit";
 import { contextoDe, reevaluarListing, type Transicion } from "./listing";
-import { CANAL_MARKETPLACE, IMAGE_VARIANTS, isListingStatus, type ListingStatus } from "./status";
+import {
+  CANAL_MARKETPLACE,
+  IMAGE_MAX_ATTEMPTS,
+  IMAGE_VARIANTS,
+  PROVIDER_ESTILO_NUEVO,
+  esEstiloNuevo,
+  isListingStatus,
+  type ListingStatus,
+} from "./status";
 
 export const TASK_ACTIONS = ["publicar", "quitar"] as const;
 export type TaskAction = (typeof TASK_ACTIONS)[number];
@@ -49,6 +57,32 @@ const LEASE = Prisma.raw(`interval '${ROBOT_LEASE_MINUTES} minutes'`);
 // Clave fija del advisory lock: serializa los claims (una sola sesión de
 // navegador contra la cuenta de Facebook a la vez).
 const LOCK_KEY = Prisma.raw(`hashtext('bloo.marketplace_robot')`);
+
+// 'publicar' que todavía NO se puede repartir (queda en 'pendiente'):
+//  a) el modelo no tiene un hero 'lista' del estilo NUEVO (ver esEstiloNuevo
+//     en status.ts) — el dueño rechazó el estilo viejo, nunca se publica; o
+//  b) tiene un hero en regeneración: se espera a que termine para no
+//     publicar con la foto que está por reemplazarse. 'error' con intentos de
+//     sobra cuenta como en curso (el worker lo reintenta, ej. quota_wait).
+// Defensa en profundidad: reconciliarTareas ya cancela 'publicar' cuando la
+// publicación deja de estar 'listo_para_publicar', que exige (a).
+const PREFIJO_NUEVO = `${PROVIDER_ESTILO_NUEVO}%`;
+const ESPERANDO_FOTO = Prisma.sql`
+  q."action" = 'publicar' AND (
+    NOT EXISTS (
+      SELECT 1 FROM ${SCHEMA}."ChannelListing" l
+        JOIN ${SCHEMA}."GeneratedImage" g ON g."modelId" = l."modelId"
+       WHERE l."id" = q."listingId" AND g."variant" = 'hero'
+         AND g."estado" = 'lista' AND g."provider" LIKE ${PREFIJO_NUEVO}
+    )
+    OR EXISTS (
+      SELECT 1 FROM ${SCHEMA}."ChannelListing" l
+        JOIN ${SCHEMA}."GeneratedImage" g ON g."modelId" = l."modelId"
+       WHERE l."id" = q."listingId" AND g."variant" = 'hero'
+         AND (g."estado" IN ('pendiente', 'generando')
+              OR (g."estado" = 'error' AND g."attempts" < ${IMAGE_MAX_ATTEMPTS}))
+    )
+  )`;
 
 function isTaskAction(s: string): s is TaskAction {
   return (TASK_ACTIONS as readonly string[]).includes(s);
@@ -184,6 +218,14 @@ export async function contarPendientes(): Promise<number> {
   return prisma.marketplaceTask.count({ where: { status: "pendiente", attempts: { lt: ROBOT_MAX_ATTEMPTS } } });
 }
 
+/** Pendientes que no se reparten todavía porque su hero se está regenerando. */
+export async function contarEsperandoFotos(): Promise<number> {
+  const rows = await prisma.$queryRaw<{ n: number }[]>`
+    SELECT COUNT(*)::int AS n FROM ${SCHEMA}."MarketplaceTask" q
+     WHERE q."status" = 'pendiente' AND q."attempts" < ${ROBOT_MAX_ATTEMPTS} AND ${ESPERANDO_FOTO}`;
+  return rows[0]?.n ?? 0;
+}
+
 export async function estadoRobot(): Promise<{ pausado: boolean; motivo: string | null }> {
   const c = await prisma.appConfig.findUnique({
     where: { id: 1 },
@@ -232,6 +274,7 @@ export async function reclamarSiguiente(): Promise<{ tarea: TareaReclamada | nul
        WHERE t."id" = (
          SELECT q."id" FROM ${SCHEMA}."MarketplaceTask" q
           WHERE q."status" = 'pendiente' AND q."attempts" < ${ROBOT_MAX_ATTEMPTS}
+            AND NOT (${ESPERANDO_FOTO})
           ORDER BY q."createdAt" ASC, q."id" ASC
           LIMIT 1
           FOR UPDATE SKIP LOCKED
@@ -255,7 +298,7 @@ export interface RobotTaskPayload {
     condition: "Nuevo";
     location: "San José";
   };
-  /** publicUrl de las imágenes 'lista', hero primero, máx 10. */
+  /** publicUrl de las imágenes 'lista' de estilo nuevo, hero primero, máx 10. */
   images: string[];
 }
 
@@ -273,7 +316,7 @@ export async function armarPayload(t: TareaReclamada): Promise<RobotTaskPayload>
           precioVentaCent: true,
           generatedImages: {
             where: { estado: "lista", publicUrl: { not: null } },
-            select: { variant: true, publicUrl: true, createdAt: true },
+            select: { variant: true, publicUrl: true, provider: true, createdAt: true },
             orderBy: { createdAt: "asc" },
           },
         },
@@ -286,7 +329,10 @@ export async function armarPayload(t: TareaReclamada): Promise<RobotTaskPayload>
     const i = (IMAGE_VARIANTS as readonly string[]).indexOf(v);
     return i === -1 ? IMAGE_VARIANTS.length : i;
   };
-  const images = [...m.generatedImages]
+  // SOLO estilo nuevo: una foto vieja nunca llega a Facebook, aunque siga
+  // 'lista' (queda visible en el panel hasta que termine su reemplazo).
+  const images = m.generatedImages
+    .filter((i) => esEstiloNuevo(i.provider))
     .sort((a, b) => orden(a.variant) - orden(b.variant) || a.createdAt.getTime() - b.createdAt.getTime())
     .flatMap((i) => (i.publicUrl ? [i.publicUrl] : []))
     .slice(0, MAX_IMAGENES);
@@ -309,6 +355,7 @@ export async function armarPayload(t: TareaReclamada): Promise<RobotTaskPayload>
 }
 
 export type ResultadoRobot =
+  | { status: "dry_run" }
   | { status: "hecha"; externalUrl?: string }
   | { status: "fallida"; error?: string }
   | { status: "necesita_humano"; error?: string };
@@ -335,6 +382,20 @@ export async function aplicarResultado(taskId: string, r: ResultadoRobot): Promi
     if (!isTaskAction(t.action)) return { ok: false, code: 409, error: `acción desconocida: ${t.action}` };
     const ahora = new Date();
     const cond = { id: t.id, status: "en_proceso" };
+
+    if (r.status === "dry_run") {
+      // Prueba del robot sin tocar Facebook: solo suelta el lease para no
+      // trabar la cola 30 min. Sin intento, sin mover la publicación.
+      await tx.marketplaceTask.updateMany({ where: cond, data: { status: "pendiente", lockedUntil: null } });
+      return {
+        ok: true,
+        task: { id: t.id, status: "pendiente", attempts: t.attempts },
+        transicion: null,
+        listingMovido: false,
+        action: t.action,
+        listingId: t.listingId,
+      };
+    }
 
     if (r.status === "necesita_humano") {
       const motivo = (r.error ?? "El robot pidió ayuda humana").slice(0, 500);

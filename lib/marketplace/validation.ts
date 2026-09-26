@@ -77,12 +77,20 @@ export type ImageResult = z.infer<typeof imageResultSchema>;
 /** Resultado que reporta el robot de Marketplace (/api/robot/tasks/[id]/result).
  *  'fallida' = reintentable (consume intento); 'necesita_humano' = captcha,
  *  login o checkpoint: pausa el robot sin gastar intento. */
-export const robotResultSchema = z.object({
-  status: z.enum(["hecha", "fallida", "necesita_humano"]),
-  // nullish: el robot manda null cuando publicó pero no encontró el link.
-  externalUrl: externalUrlSchema.nullish(),
-  error: z.string().trim().max(2000).nullish(),
-});
+export const robotResultSchema = z
+  .object({
+    status: z.enum(["hecha", "fallida", "necesita_humano"]).optional(),
+    // nullish: el robot manda null cuando publicó pero no encontró el link.
+    externalUrl: externalUrlSchema.nullish(),
+    error: z.string().trim().max(2000).nullish(),
+    // Prueba sin Facebook: solo libera el lease (vuelve a pendiente, sin
+    // intento). Si viene, se ignora `status`.
+    dryRun: z.boolean().optional(),
+  })
+  .refine((b) => b.dryRun === true || b.status !== undefined, {
+    message: "status es obligatorio (salvo dryRun:true)",
+    path: ["status"],
+  });
 export type RobotResult = z.infer<typeof robotResultSchema>;
 
 /** PATCH /api/robot/state (admin). */

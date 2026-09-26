@@ -30,6 +30,21 @@ export const IMAGE_MAX_ATTEMPTS = 5;
 export const IMAGE_LEASE_MINUTES = 30;
 export const IMAGE_DEFAULT_RETRY_SECONDS = 3600;
 
+/**
+ * Estilo de foto aprobado por el dueño (2026-09-25): SOLO la edición FLUX.2
+ * del producto real que pasó el control de fidelidad. El worker marca esas
+ * filas con provider "cfedit:<modelo>" (imagegen/imagegen/run.py, rama edit).
+ * Todo lo demás es estilo viejo y NO se publica: composite sobre fondo
+ * ("hfspace", "pollinations"…), incluso los fallbacks generados después del
+ * requeue (traen qa.edit con intentos fallidos, así que ni qa.edit ni la
+ * fecha de creación sirven de criterio; el provider sí).
+ */
+export const PROVIDER_ESTILO_NUEVO = "cfedit:";
+
+export function esEstiloNuevo(provider: string | null | undefined): boolean {
+  return typeof provider === "string" && provider.startsWith(PROVIDER_ESTILO_NUEVO);
+}
+
 export function isListingStatus(s: string): s is ListingStatus {
   return (LISTING_STATUSES as readonly string[]).includes(s);
 }
@@ -37,7 +52,8 @@ export function isListingStatus(s: string): s is ListingStatus {
 export interface ListingContexto {
   /** stockQty − stockReservado del modelo. */
   available: number;
-  /** Hay al menos una imagen 'lista' de la variante hero. */
+  /** Hay al menos un hero 'lista' del estilo NUEVO (ver esEstiloNuevo). Un
+   *  hero viejo no cuenta: la publicación queda "esperando imágenes". */
   heroLista: boolean;
   /** Model activo y tipo='lente'. Un modelo que dejó de serlo se trata como
    *  agotado: nunca debe quedar "listo" algo que no se vende por acá. */
