@@ -98,7 +98,11 @@ async function main() {
 
     if (task.action === "publicar") {
       const r = await publicar(page, task, /** @type {NonNullable<typeof imgs>} */ (imgs).files, { dryRun });
-      if (!r.submitted) return 0; // dry-run: no se reporta
+      if (!r.submitted) {
+        // dry-run: no se reporta; captura de la pantalla "Publicar" como evidencia
+        await saveEvidence(page, task.id, `dry-run OK: pantalla Publicar alcanzada (categoría: ${r.category})`);
+        return 0;
+      }
       await report(
         r.externalUrl
           ? { status: "hecha", externalUrl: r.externalUrl }

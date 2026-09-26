@@ -99,8 +99,8 @@ jobs:
         run: node run.mjs
 
       # Solo capturas PNG + un .txt con URL sin query y el error. Nunca storageState ni HTML.
-      - name: Upload failure evidence
-        if: failure() && steps.pending.outputs.run == 'true'
+      - name: Upload evidence (fallo o dry-run)
+        if: (failure() || inputs.dry_run == true) && steps.pending.outputs.run == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: robot-evidence-${{ github.run_id }}

@@ -13,6 +13,9 @@ import { CheckpointError } from "../src/checkpoint.mjs";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const CREATE = readFileSync(path.join(HERE, "fixtures", "create-item.html"), "utf8");
 const TITLE = "Lentes de sol bloo Marina";
+const DESC =
+  Array.from({ length: 12 }, (_, i) => `Línea ${i + 1}: acetato pulido, protección UV400, estuche incluido. ₡`).join("\n") +
+  "\n\nEnvíos a todo CR.";
 
 const ITEM = `<!doctype html><html lang="es"><body><h1>${TITLE}</h1>
 <button id="m">Marcar como agotado</button>
@@ -69,7 +72,7 @@ after(async () => {
 const task = {
   id: "t1",
   action: "publicar",
-  kit: { title: TITLE, description: "Acetato.\nUV400.", priceColones: 15000.4, category: "Accesorios", condition: "Nuevo", location: "San José" },
+  kit: { title: TITLE, description: DESC, priceColones: 15000.4, category: "Accesorios", condition: "Nuevo", location: "San José" },
   images: [],
 };
 
@@ -92,7 +95,8 @@ test("publicar real contra stub: valores correctos y URL", { timeout: 120_000 },
   assert.deepEqual(submits[0], {
     titulo: TITLE,
     precio: "15000",
-    descripcion: "Acetato.\nUV400.",
+    descripcion: DESC,
+    marca: "bloo",
     fotos: 2,
     promo: false,
     categoria: "Joyería y accesorios",

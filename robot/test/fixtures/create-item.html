@@ -23,7 +23,7 @@
   </div>
 
   <div role="button" tabindex="0" id="mas">Más detalles</div>
-  <div id="detalles" hidden><label>Descripción <textarea id="desc"></textarea></label></div>
+  <div id="detalles" hidden><label>Descripción <textarea id="desc"></textarea></label><label>Marca <input type="text" id="marca"></label></div>
 
   <label><input type="checkbox" id="promo" checked> Promocionar tras publicar</label>
   <label><input type="checkbox" id="ocultar"> Ocultar a amigos</label>
@@ -50,7 +50,7 @@
     $('step1').hidden = true; $('step2').hidden = false;
   };
   $('pub').onclick = async () => {
-    const body = { titulo: $('titulo').value, precio: $('precio').value, descripcion: $('desc').value,
+    const body = { titulo: $('titulo').value, precio: $('precio').value, descripcion: $('desc').value, marca: $('marca').value,
       fotos: $('fotos').files.length, promo: $('promo').checked, ...state };
     await fetch('/__submit', { method: 'POST', body: JSON.stringify(body) });
     location.href = '/marketplace/item/123456/';

@@ -39,7 +39,46 @@ async function typeInto(page, field, text) {
   await pause(300, 800);
   await page.keyboard.press("ControlOrMeta+a");
   await page.keyboard.press("Backspace");
-  await field.pressSequentially(text, { delay: typingDelay() });
+  await field.pressSequentially(text, { delay: typingDelay(), timeout: 90_000 });
+  await pause();
+}
+
+/** Valor actual de un input/textarea/contenteditable. @param {Locator} field */
+async function fieldValue(field) {
+  return field.evaluate((el) =>
+    el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement ? el.value : /** @type {HTMLElement} */ (el).innerText
+  );
+}
+
+/** Normaliza saltos de línea/espacios finales para comparar. @param {string} s */
+const norm = (s) => s.replace(/\r\n?/g, "\n").replace(/ /g, " ").trim();
+
+/**
+ * Texto largo: insertText en 2–4 trozos con pausas cortas (tipear char a char tarda demasiado).
+ * Verifica que el valor final sea exactamente el texto (saltos de línea incluidos).
+ * @param {Page} page @param {Locator} field @param {string} text
+ */
+async function insertLongText(page, field, text) {
+  await field.click({ timeout: 90_000 });
+  await pause(300, 800);
+  await page.keyboard.press("ControlOrMeta+a");
+  await page.keyboard.press("Backspace");
+  const parts = Math.min(4, Math.max(2, Math.ceil(text.length / 250)));
+  const size = Math.ceil(text.length / parts);
+  for (let i = 0; i < text.length; i += size) {
+    await page.keyboard.insertText(text.slice(i, i + size));
+    await pause(300, 900);
+  }
+  let got = await fieldValue(field).catch(() => "");
+  if (norm(got) !== norm(text)) {
+    // Un reintento con fill() (dispara input de React) antes de rendirse.
+    await field.fill(text, { timeout: 90_000 }).catch(() => {});
+    await pause();
+    got = await fieldValue(field).catch(() => "");
+  }
+  if (norm(got) !== norm(text)) {
+    throw new Error(`La descripción quedó incompleta (${norm(got).length}/${norm(text).length} caracteres)`);
+  }
   await pause();
 }
 
@@ -224,7 +263,15 @@ export async function publicar(page, task, files, opts = {}) {
       descField = await firstVisible(fieldByName(page, /^Descripci[oó]n/i), 8000);
     }
     if (!descField) throw new Error("No encontré el campo Descripción");
-    await typeInto(page, descField, desc);
+    await insertLongText(page, descField, desc);
+    log(`descripción verificada (${desc.length} caracteres)`);
+  }
+
+  // Marca (opcional, aparece en "Más detalles")
+  const brand = await firstVisible(fieldByName(page, /^Marca/i), 1500);
+  if (brand) {
+    await typeInto(page, brand, "bloo");
+    log("marca: bloo");
   }
 
   // Ubicación solo si está vacía y visible
