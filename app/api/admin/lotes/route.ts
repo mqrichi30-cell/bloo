@@ -7,7 +7,7 @@ import { loteCreateSchema } from "@/lib/validation";
 import { deriveLoteCostoTotalCent, getTipoCambioUsdCent, computeFechaVencimientoPago } from "@/lib/lote";
 import { getAppConfig } from "@/lib/config";
 import { writeAudit } from "@/lib/audit";
-import { CUENTA_COGS, CUENTA_CXP } from "@/lib/conta";
+import { CUENTA_COMPRAS, CUENTA_CXP } from "@/lib/conta";
 
 /**
  * Lote de compra de inventario, ATADO al modelo que recibe sus unidades
@@ -163,9 +163,9 @@ export async function POST(request: Request) {
       // marcados `pagado`). Corrección real pendiente: agregar
       // `cuentaMedioPagoId` opcional a `loteCreateSchema` y, si viene, debitar
       // el gasto contra esa cuenta en vez de contra CxP.
-      const cogs = await tx.cuenta.findUnique({ where: { codigo: CUENTA_COGS } });
+      const compras = await tx.cuenta.findUnique({ where: { codigo: CUENTA_COMPRAS } });
       const cxp = await tx.cuenta.findUnique({ where: { codigo: CUENTA_CXP } });
-      if (!cogs) throw new LoteError(`Falta la cuenta '${CUENTA_COGS}' (Costo de mercadería vendida).`, 400);
+      if (!compras) throw new LoteError(`Falta la cuenta '${CUENTA_COMPRAS}' (Compras de mercadería).`, 400);
       if (!cxp) throw new LoteError(`Falta la cuenta '${CUENTA_CXP}' (Cuentas por pagar proveedores).`, 400);
 
       await tx.asiento.create({
@@ -177,7 +177,7 @@ export async function POST(request: Request) {
           userId: session.userId!,
           lineas: {
             create: [
-              { cuentaId: cogs.id, debeCent: costoTotalCent, haberCent: 0 },
+              { cuentaId: compras.id, debeCent: costoTotalCent, haberCent: 0 },
               { cuentaId: cxp.id, debeCent: 0, haberCent: costoTotalCent },
             ],
           },

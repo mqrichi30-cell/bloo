@@ -18,7 +18,11 @@ export const CUENTA_IVA = "2-1-002"; // IVA por pagar (solo si AppConfig.ivaActi
 // contador en el libro histórico (Lote 1, 03-jul) — NO cambiar a 1-2-001
 // "Inventario" sin también migrar ese asiento, o el balance deja de ser
 // comparable entre períodos.
-export const CUENTA_COGS = "5-1-001"; // Costo de mercadería vendida
+// La compra se registra UNA sola vez, contra "Compras de mercadería". La
+// 5-1-001 "Costo de mercadería vendida" queda en cero a propósito: vender no
+// genera costo (pedido de Cris 2026-09-25; las compras históricas se movieron
+// a 5-1-002, ver AuditLog accion='conta.reclasificar').
+export const CUENTA_COMPRAS = "5-1-002"; // Compras de mercadería
 export const CUENTA_CXP = "2-1-001"; // Cuentas por pagar proveedores
 // Diferencial cambiario entre el TC congelado en Lote.costoTotalCent (al
 // comprar) y el TC vigente al momento de pagar (ver lib/lote.ts). Cuenta de
