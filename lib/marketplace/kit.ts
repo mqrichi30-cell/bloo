@@ -42,18 +42,23 @@ export function whatsappUrlPara(estilo: string): string {
 function titulo(nombre: string, color: string | null): string {
   // Una publicación por COLOR (decisión del dueño 2026-09-23): el color va
   // siempre en el título, o las 7 publicaciones de Osa saldrían idénticas.
-  // Si no cabe en 60, se recorta el NOMBRE, nunca el color (es lo que
-  // distingue una publicación de otra). Sin material en el título: no está
-  // confirmado para todos los modelos (ver Model.material).
-  const prefijo = "Lentes de sol bloo · ";
-  if (!color) return (prefijo + nombre).slice(0, TITULO_MAX);
-  const sufijo = ` · ${color}`;
-  const completo = prefijo + nombre + sufijo;
+  // Sin material en el título: no está confirmado para todos los modelos
+  // (ver Model.material).
+  //
+  // Recorte (decisión del dueño 2026-09-26, reemplaza la de recortar el
+  // nombre): tope 60; el prefijo "Lentes de sol bloo" va SIEMPRE completo y
+  // con esta grafía — el robot distingue sus publicaciones de las 4 manuales
+  // viejas ("Lentes de sol Bloo") por el título exacto. Si no cabe, se corta
+  // DESDE EL FINAL con "…": se pierde primero el color, el nombre queda
+  // entero mientras se pueda. El título con el que se publicó queda guardado
+  // en ChannelListing.publishedTitle: cambiar esta regla no rompe la
+  // búsqueda de las ya publicadas.
+  const completo = `Lentes de sol bloo · ${nombre}${color ? ` · ${color}` : ""}`;
   if (completo.length <= TITULO_MAX) return completo;
-  const espacioNombre = TITULO_MAX - prefijo.length - sufijo.length - 1; // 1 = "…"
-  if (espacioNombre >= 3) return prefijo + nombre.slice(0, espacioNombre).trimEnd() + "…" + sufijo;
-  // Color larguísimo: se sacrifica el prefijo antes que el color.
-  return `bloo ${nombre} · ${color}`.slice(0, TITULO_MAX);
+  const cortado = completo
+    .slice(0, TITULO_MAX - 1)
+    .replace(/[\s·]+$/, ""); // sin " ·" colgando antes del "…"
+  return `${cortado}…`;
 }
 
 /**

@@ -83,6 +83,7 @@ export async function PATCH(request: Request, { params }: { params: { id: string
     soldAt?: Date;
     externalUrl?: string;
     contentHash?: string;
+    publishedTitle?: string;
   }) {
     const r = await prisma.channelListing.updateMany({
       where: { id: listing!.id, status: actual },
@@ -101,13 +102,19 @@ export async function PATCH(request: Request, { params }: { params: { id: string
           throw new ConflictoError(`No se puede marcar publicado desde "${actual}".`);
         }
         if (ctx.available <= 0) throw new ConflictoError("No hay unidades disponibles de este modelo.");
-        const hash = kitHash(
-          renderKit({ nombre: m.nombre, color: m.color, material: m.material, precioVentaCent: m.precioVentaCent })
-        );
+        const kitActual = renderKit({
+          nombre: m.nombre,
+          color: m.color,
+          material: m.material,
+          precioVentaCent: m.precioVentaCent,
+        });
+        const hash = kitHash(kitActual);
         await mover({
           status: "publicado",
-          // Re-marcar una ya publicada (ej. para pegar el link) no le cambia la fecha.
-          ...(actual === "publicado" ? {} : { publishedAt: new Date() }),
+          // Re-marcar una ya publicada (ej. para pegar el link) no le cambia
+          // la fecha ni el título guardado. Publicada a mano: se asume el
+          // título del kit que Cris copió (el robot lo usa para quitarla).
+          ...(actual === "publicado" ? {} : { publishedAt: new Date(), publishedTitle: kitActual.title }),
           ...(body.externalUrl ? { externalUrl: body.externalUrl } : {}),
           contentHash: hash,
         });

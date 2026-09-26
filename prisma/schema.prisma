@@ -610,6 +610,10 @@ model ChannelListing {
   soldAt        DateTime?
   // Link de la publicación en Marketplace, pegado por Cris.
   externalUrl   String?
+  // Título EXACTO con el que se publicó (robot o Cris). El robot lo usa para
+  // encontrar la publicación al quitarla: si la regla del título cambia
+  // después (kit.ts), la búsqueda no se rompe ni cae en otra publicación.
+  publishedTitle String?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
   tasks         MarketplaceTask[]
@@ -642,6 +646,9 @@ model MarketplaceTask {
   // Lease de la corrida que la reclamó: vencido = el robot murió a mitad.
   lockedUntil DateTime?
   externalUrl String?
+  // Título que se le entregó al robot en el último claim (snapshot): al
+  // reportar 'hecha' un 'publicar', pasa a ChannelListing.publishedTitle.
+  title       String?
   createdAt   DateTime       @default(now())
   updatedAt   DateTime       @updatedAt
   doneAt      DateTime?

@@ -346,6 +346,7 @@ export async function armarPayload(t: TareaReclamada): Promise<RobotTaskPayload>
     where: { id: t.listingId },
     select: {
       externalUrl: true,
+      publishedTitle: true,
       model: {
         select: {
           nombre: true,
@@ -363,6 +364,12 @@ export async function armarPayload(t: TareaReclamada): Promise<RobotTaskPayload>
   });
   const m = l.model;
   const kit = renderKit({ nombre: m.nombre, color: m.color, material: m.material, precioVentaCent: m.precioVentaCent });
+  // 'quitar' busca la publicación por el título EXACTO con el que salió
+  // (publishedTitle); el calculado solo si no quedó guardado. 'publicar' usa
+  // el de hoy. Se congela en la tarea: al reportar 'hecha' pasa a
+  // ChannelListing.publishedTitle aunque kit.ts cambie en el medio.
+  const title = t.action === "quitar" ? l.publishedTitle ?? kit.title : kit.title;
+  await prisma.marketplaceTask.update({ where: { id: t.id }, data: { title } });
   const orden = (v: string) => {
     const i = (IMAGE_VARIANTS as readonly string[]).indexOf(v);
     return i === -1 ? IMAGE_VARIANTS.length : i;
@@ -381,7 +388,7 @@ export async function armarPayload(t: TareaReclamada): Promise<RobotTaskPayload>
     listingId: t.listingId,
     externalUrl: t.externalUrl ?? l.externalUrl,
     kit: {
-      title: kit.title,
+      title,
       description: kit.description,
       priceColones: Math.round(m.precioVentaCent / 100),
       category: "Accesorios",
@@ -411,7 +418,7 @@ export async function aplicarResultado(taskId: string, r: ResultadoRobot): Promi
   return prisma.$transaction(async (tx) => {
     const t = await tx.marketplaceTask.findUnique({
       where: { id: taskId },
-      select: { id: true, status: true, action: true, attempts: true, listingId: true },
+      select: { id: true, status: true, action: true, attempts: true, listingId: true, title: true },
     });
     if (!t) return { ok: false, code: 404, error: "Tarea no encontrada" };
     if (t.status !== "en_proceso") {
@@ -494,9 +501,13 @@ export async function aplicarResultado(taskId: string, r: ResultadoRobot): Promi
     let movido = 0;
     if (t.action === "publicar") {
       const m = l.model;
-      const hash = kitHash(
-        renderKit({ nombre: m.nombre, color: m.color, material: m.material, precioVentaCent: m.precioVentaCent })
-      );
+      const kitActual = renderKit({
+        nombre: m.nombre,
+        color: m.color,
+        material: m.material,
+        precioVentaCent: m.precioVentaCent,
+      });
+      const hash = kitHash(kitActual);
       // Desde 'esperando_imagenes' también: si el hero se regeneró mientras el
       // robot publicaba, la publicación YA está viva en Facebook.
       const u = await tx.channelListing.updateMany({
@@ -505,6 +516,8 @@ export async function aplicarResultado(taskId: string, r: ResultadoRobot): Promi
           status: "publicado",
           publishedAt: ahora,
           contentHash: hash,
+          // El título que el robot tipeó (snapshot del claim).
+          publishedTitle: t.title ?? kitActual.title,
           ...(r.externalUrl ? { externalUrl: r.externalUrl } : {}),
         },
       });
