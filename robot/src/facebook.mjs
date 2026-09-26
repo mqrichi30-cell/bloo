@@ -106,29 +106,107 @@ export function normalizeItemUrl(raw, base = FB_BASE) {
   return `${base}/marketplace/item/${m[1]}/`;
 }
 
-/** Busca la publicación por título en "Tus publicaciones". @param {Page} page @param {string} title @param {string} base */
-export async function findListingUrl(page, title, base = FB_BASE) {
+/** Normaliza un título para comparar EXACTO (solo colapsa espacios; respeta mayúsculas y acentos). @param {string} s */
+export const cleanTitle = (s) => String(s || "").replace(/ /g, " ").replace(/\s+/g, " ").trim();
+
+/**
+ * Lee "Tus publicaciones" (página ya abierta) y devuelve los ids de las tarjetas cuyo título es
+ * EXACTAMENTE `title`, y cuántos textos exactos hay en total (para detectar tarjetas sin enlace).
+ * Nunca usa coincidencia parcial: los listados manuales del dueño ("Lentes de sol Bloo") no deben tocarse.
+ * @param {Page} page @param {string} title
+ * @returns {Promise<{ids: string[], orphanCount: number}>}
+ */
+export async function scanExactTitle(page, title) {
+  return page.evaluate((want) => {
+    const clean = (/** @type {any} */ s) => String(s || "").replace(/ /g, " ").replace(/\s+/g, " ").trim();
+    const idOf = (/** @type {Element} */ a) => ((a.getAttribute("href") || "").match(/\/marketplace\/item\/(\d+)/) || [])[1];
+    const SEL = 'a[href*="/marketplace/item/"]';
+    /** textos "hoja" y aria-labels de un elemento */
+    const textsOf = (/** @type {Element} */ root) => {
+      const out = [];
+      for (const el of [root, ...root.querySelectorAll("*")]) {
+        const lbl = el.getAttribute("aria-label");
+        if (lbl) out.push(lbl);
+        if (el.children.length === 0) out.push(el.textContent);
+      }
+      return out;
+    };
+    const ids = new Set();
+    /** @type {Element[]} */
+    const cards = [];
+    for (const a of document.querySelectorAll(SEL)) {
+      const id = idOf(a);
+      if (!id) continue;
+      // Subir hasta la tarjeta: el mayor ancestro que solo enlaza a ESTA publicación.
+      let card = a;
+      while (card.parentElement && card.parentElement !== document.body) {
+        const p = card.parentElement;
+        if ([...p.querySelectorAll(SEL)].some((x) => idOf(x) && idOf(x) !== id)) break;
+        card = p;
+      }
+      if (textsOf(card).some((t) => clean(t) === want)) {
+        ids.add(id);
+        cards.push(card);
+      }
+    }
+    // Títulos exactos FUERA de las tarjetas con enlace (tarjeta sin enlace = posible duplicado).
+    let orphanCount = 0;
+    for (const el of document.body.querySelectorAll("*")) {
+      if (el.children.length === 0 && clean(el.textContent) === want && !cards.some((c) => c.contains(el))) orphanCount++;
+    }
+    return { ids: [...ids], orphanCount };
+  }, cleanTitle(title));
+}
+
+/** Abre "Tus publicaciones", espera y hace scroll para cargar tarjetas. @param {Page} page @param {string} title @param {string} base */
+async function openSellingAndScan(page, title, base) {
   await go(page, `${base}/marketplace/you/selling`);
-  await page.getByText(title, { exact: false }).first().waitFor({ timeout: 20_000 }).catch(() => {});
-  const hrefs = await page.$$eval(
-    'a[href*="/marketplace/item/"]',
-    (as, t) =>
-      as
-        .filter((a) => (a.textContent || "").toLowerCase().includes(String(t).toLowerCase()))
-        .map((a) => a.getAttribute("href") || ""),
-    title
-  );
-  for (const h of hrefs) {
-    const n = normalizeItemUrl(h, base);
-    if (n) return n;
+  await page.getByText(cleanTitle(title), { exact: true }).first().waitFor({ timeout: 15_000 }).catch(() => {});
+  for (let i = 0; i < 3; i++) {
+    await page.mouse.wheel(0, 1500);
+    await pause(700, 1400);
   }
-  // Fallback: el texto del título dentro de un ancestro <a>.
-  const href = await page
-    .getByText(title, { exact: false })
-    .first()
-    .evaluate((el) => el.closest("a")?.getAttribute("href") || "")
-    .catch(() => "");
-  return href ? normalizeItemUrl(href, base) : null;
+  return scanExactTitle(page, title);
+}
+
+/**
+ * Busca la URL de UNA publicación con título EXACTO en "Tus publicaciones".
+ * - 0 coincidencias → null (tras reintentar con recarga).
+ * - >1 coincidencias (o un título exacto sin enlace junto a otros) → Error: nunca adivina.
+ * @param {Page} page @param {string} title @param {string} [base]
+ * @param {{exclude?: string[], attempts?: number}} [opts] exclude = ids que ya existían antes de publicar
+ */
+export async function findListingUrl(page, title, base = FB_BASE, opts = {}) {
+  const exclude = new Set(opts.exclude || []);
+  const attempts = opts.attempts ?? 3;
+  for (let i = 0; i < attempts; i++) {
+    const { ids, orphanCount } = await openSellingAndScan(page, title, base);
+    const fresh = ids.filter((id) => !exclude.has(id));
+    const total = fresh.length + orphanCount;
+    if (fresh.length > 1 || (fresh.length === 1 && orphanCount > 0) || (!exclude.size && orphanCount > 1)) {
+      throw new Error(`Hay ${total} publicaciones con el título exacto "${cleanTitle(title)}"; no adivino cuál`);
+    }
+    if (fresh.length === 1) return `${base}/marketplace/item/${fresh[0]}/`;
+    if (!exclude.size && ids.length === 0 && orphanCount === 1) {
+      // Título exacto sin enlace visible: abrirlo y leer la URL.
+      await page.getByText(cleanTitle(title), { exact: true }).first().click();
+      await page.waitForURL(/\/marketplace\/item\/\d+/, { timeout: 15_000 }).catch(() => {});
+      const u = normalizeItemUrl(page.url(), base);
+      if (u) return u;
+    }
+    if (i < attempts - 1) await pause(4000, 8000); // la publicación nueva puede tardar en aparecer
+  }
+  return null;
+}
+
+/** Ids con título exacto que ya existen (antes de publicar). Nunca falla. @param {Page} page @param {string} title @param {string} base */
+async function existingIds(page, title, base) {
+  try {
+    return (await openSellingAndScan(page, title, base)).ids;
+  } catch (e) {
+    if (e?.name === "CheckpointError") throw e;
+    return [];
+  }
 }
 
 /** Selecciona una opción de un combobox (Categoría / Estado). */
@@ -229,6 +307,11 @@ export async function publicar(page, task, files, opts = {}) {
   const price = String(Math.round(Number(kit.priceColones) || 0));
   if (!/^\d+$/.test(price) || price === "0") throw new Error("Precio inválido en la tarea");
 
+  // Ids con el mismo título exacto que ya existían (p. ej. una versión vieja vendida):
+  // así, tras publicar, la URL nueva es la ÚNICA id que no estaba antes.
+  const prior = opts.dryRun ? [] : await existingIds(page, kit.title, base);
+  if (prior.length) log(`ya había ${prior.length} publicación(es) con el mismo título exacto`);
+
   await go(page, `${base}/marketplace/create/item`);
 
   // Fotos
@@ -306,7 +389,13 @@ export async function publicar(page, task, files, opts = {}) {
   await assertNoCheckpoint(page);
 
   let externalUrl = normalizeItemUrl(page.url(), base);
-  if (!externalUrl) externalUrl = await findListingUrl(page, kit.title, base);
+  if (!externalUrl) {
+    externalUrl = await findListingUrl(page, kit.title, base, { exclude: prior }).catch((e) => {
+      if (e?.name === "CheckpointError") throw e;
+      log(`url no ubicada: ${e instanceof Error ? e.message : e}`);
+      return null;
+    });
+  }
   log(`publicada; url: ${externalUrl ? safeUrl(externalUrl) : "(no encontrada)"}`);
   return { externalUrl, category, submitted: true };
 }
@@ -322,13 +411,21 @@ const SOLD_DONE_RE = /Marcar como disponible|Marcado como (agotado|vendido)|^\s*
  */
 export async function quitar(page, task, opts = {}) {
   const base = opts.base || FB_BASE;
+  const title = task.kit?.title ? cleanTitle(task.kit.title) : "";
   let url = task.externalUrl ? normalizeItemUrl(task.externalUrl, base) : null;
   if (!url) {
-    if (!task.kit?.title) throw new Error("Tarea sin externalUrl ni título");
-    url = await findListingUrl(page, task.kit.title, base);
-    if (!url) throw new Error("No encontré la publicación en Tus publicaciones");
+    if (!title) throw new Error("Tarea sin externalUrl ni título");
+    // Solo título EXACTO; 0 o >1 coincidencias → fallida (nunca tocar los listados manuales).
+    url = await findListingUrl(page, title, base);
+    if (!url) throw new Error(`No encontré ninguna publicación con el título exacto "${title}"`);
   }
   await go(page, url);
+
+  // Seguridad: la página debe mostrar exactamente el título de la tarea.
+  if (title) {
+    const shown = await firstVisible([page.getByText(title, { exact: true })], 10_000);
+    if (!shown) throw new Error(`La publicación ${safeUrl(url)} no muestra el título exacto "${title}"; no la toco`);
+  }
 
   if (await firstVisible([page.getByRole("button", { name: /Marcar como disponible/i })], 2500)) return { method: "ya_estaba" };
 
