@@ -16,12 +16,31 @@ const { browser, context } = await launch({ headless: false });
 const page = await context.newPage();
 await page.goto("https://www.facebook.com/");
 
-const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-await rl.question(
-  "\nIniciá sesión en Facebook en la ventana (incluido 2FA si lo pide).\n" +
-    "Cuando veas tu inicio de Facebook, volvé acá y presioná Enter... "
-);
-rl.close();
+if (process.env.AUTO_WAIT === "1") {
+  // Sin terminal interactiva: espera a que aparezca la cookie de sesión
+  // (c_user) y a que la página salga del login/checkpoint. Máx. 15 min.
+  console.log("Esperando a que inicies sesión en la ventana de Chrome (máx. 15 min)...");
+  const deadline = Date.now() + 15 * 60_000;
+  for (;;) {
+    const cookies = await context.cookies("https://www.facebook.com");
+    const url = page.url();
+    if (cookies.some((c) => c.name === "c_user") && !/login|checkpoint|two_step/i.test(url)) break;
+    if (Date.now() > deadline) {
+      await browser.close();
+      console.error("No se detectó el inicio de sesión a tiempo. Volvé a correr el script.");
+      process.exit(1);
+    }
+    await page.waitForTimeout(3000);
+  }
+  await page.waitForTimeout(5000);
+} else {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  await rl.question(
+    "\nIniciá sesión en Facebook en la ventana (incluido 2FA si lo pide).\n" +
+      "Cuando veas tu inicio de Facebook, volvé acá y presioná Enter... "
+  );
+  rl.close();
+}
 
 await context.storageState({ path: file });
 await browser.close();
