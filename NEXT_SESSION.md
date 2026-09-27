@@ -2,6 +2,12 @@
 
 Última actualización: 2026-09-24 ~00:10 CR (Jarvis). Leer SOLO esto para retomar.
 
+## 2026-09-27 — Puntos de venta + sesión permanente + susan/ashley (DEPLOYADO, commit 87fb7ab)
+- PuntoVenta (CRUD admin en `/puntos-venta`, link desde Perfil) + selector "¿Dónde se vendió?" en el flujo de venta (obligatorio solo si hay ≥1 punto activo) + se muestra en el historial junto a medio de pago y vendedor.
+- Sesión permanente por dispositivo: sin timeout de inactividad/absoluto; `User.sessionVersion` invalida sesiones ya abiertas (ver `lib/require-session.ts`, Node runtime — NO en `middleware.ts`, Edge Runtime sin Prisma). Fuerza cierre: `node scripts/2026-09-27-forzar-cierre-sesion.mjs <username> --apply`.
+- susan/ashley creadas en prod (vendedor, activo). **BLOQUEADO: no hay `/api/auth/forgot` ni `lib/mailer.ts` en el código** (solo documentados en `.env.example` como si existieran) y no hay SMTP configurado en Netlify — no pueden entrar hasta que alguien construya el flujo de reset por correo o Cris les dé una contraseña a mano.
+- Deploy: el auto-deploy de Netlify por push a `master` está roto desde antes de esta sesión (`npm ci` falla en su CI con exit code 2 en varios commits previos, incluyendo el HEAD anterior a este). Se deployó a mano con `netlify deploy --build --prod` (mismo mecanismo que los últimos deploys "ready" del historial). Alguien necesita mirar el log de build de Netlify (la CLI no expone el texto completo) para arreglar el auto-deploy.
+
 ## Objetivo
 Inventario de lentes → anuncio por color en pestaña Market (kit 1-toque, Marketplace no tiene API en CR) + 3 fotos de marca por color generadas gratis (recorte real del producto + fondo IA) + auto-reply Messenger. Todo debe correr solo, sin la PC de Cris ni tokens de Claude.
 
