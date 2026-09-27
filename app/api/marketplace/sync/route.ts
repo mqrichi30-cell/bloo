@@ -1,7 +1,7 @@
 // Botón "Sincronizar ahora" del panel /marketplace. Misma lógica que el cron
 // diario, pero con sesión admin + CSRF y el autor queda en el AuditLog.
 import { NextResponse } from "next/server";
-import { requireValidSession } from "@/lib/session";
+import { requireValidSession } from "@/lib/require-session";
 import { verifyCsrf } from "@/lib/csrf";
 import { runMarketplaceSync } from "@/lib/marketplace/sync";
 

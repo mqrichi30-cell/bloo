@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { requireValidSession } from "@/lib/session";
+import { requireValidSession } from "@/lib/require-session";
 
 export async function GET() {
   const session = await requireValidSession();

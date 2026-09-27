@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireValidSession } from "@/lib/session";
+import { requireValidSession } from "@/lib/require-session";
 import { modelSelectFor } from "@/lib/roles";
 import { verifyCsrf } from "@/lib/csrf";
 import { modelUpdateSchema } from "@/lib/validation";

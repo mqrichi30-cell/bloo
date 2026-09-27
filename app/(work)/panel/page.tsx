@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { requireValidSession } from "@/lib/session";
+import { requireValidSession } from "@/lib/require-session";
 import { PanelView } from "@/components/PanelView";
 
 export default async function PanelPage() {

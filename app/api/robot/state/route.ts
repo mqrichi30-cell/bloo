@@ -3,7 +3,7 @@
 // con CSRF, igual que el resto de mutaciones del panel.
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireValidSession } from "@/lib/session";
+import { requireValidSession } from "@/lib/require-session";
 import { verifyCsrf } from "@/lib/csrf";
 import { writeAudit } from "@/lib/audit";
 import { robotStatePatchSchema } from "@/lib/marketplace/validation";

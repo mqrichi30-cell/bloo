@@ -1,9 +1,10 @@
 import { z } from "zod";
 
+// Sesión permanente por dispositivo (2026-09-27): ya no hay "recordarme"
+// opcional, toda sesión es igual de duradera — ver lib/session.ts.
 export const loginSchema = z.object({
   username: z.string().trim().min(1, "Ingresá tu usuario").max(64),
   password: z.string().min(1, "Ingresá tu contraseña").max(256),
-  rememberMe: z.boolean().optional(),
 });
 
 /**
@@ -111,6 +112,16 @@ export const loteUpdateSchema = z.object({
   pagado: z.boolean(),
 });
 
+// Punto de venta (feria, tienda, evento) — catálogo simple de admin.
+export const puntoVentaCreateSchema = z.object({
+  nombre: z.string().trim().min(1, "El nombre es requerido").max(80),
+});
+
+export const puntoVentaUpdateSchema = z.object({
+  nombre: z.string().trim().min(1, "El nombre es requerido").max(80).optional(),
+  activo: z.boolean().optional(),
+});
+
 export const reservaCreateSchema = z.object({
   modelId: idSchema,
   cantidad: z.number().int().positive("La cantidad debe ser mayor a 0"),
@@ -132,6 +143,10 @@ export const saleCreateSchema = z.object({
   // Cuenta contable (esMedioPago=true) por donde entró la plata. Si viene, la
   // venta genera su asiento sola: Debe [medio] / Haber Ingresos por ventas.
   cuentaMedioPagoId: idSchema.optional(),
+  // Dónde se vendió. Obligatorio en el flujo SOLO si hay ≥1 PuntoVenta activo
+  // (el cliente lo exige antes de dejar continuar); el servidor solo valida
+  // que, SI viene, exista y esté activo — ver app/api/sales/route.ts.
+  puntoVentaId: idSchema.optional(),
 });
 
 /**

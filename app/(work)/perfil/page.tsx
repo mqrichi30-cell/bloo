@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { LogOut, CircleUser, RefreshCw } from "lucide-react";
+import { LogOut, CircleUser, RefreshCw, Store } from "lucide-react";
 import { AppHeader } from "@/components/AppHeader";
 import { PrimaryButton, SecondaryButton } from "@/components/ui/Button";
 import { useToast } from "@/components/ToastProvider";
@@ -42,6 +42,7 @@ function fuenteLabel(fuente: string): string {
 }
 
 function AjustesSettings() {
+  const router = useRouter();
   const { showToast } = useToast();
   const [data, setData] = useState<ConfigResponse | null>(null);
   const [rateText, setRateText] = useState("");
@@ -227,6 +228,18 @@ function AjustesSettings() {
             Guardar día de corte
           </PrimaryButton>
         </div>
+      </div>
+
+      <div className="flex flex-col gap-2 border-t border-line-200 pt-5">
+        <div>
+          <p className="text-label text-ink-900">Puntos de venta</p>
+          <p className="text-caption text-ink-600">
+            Dónde se vende (ferias, tiendas). Se elige al registrar cada venta.
+          </p>
+        </div>
+        <SecondaryButton fullWidth className="gap-2" onClick={() => router.push("/puntos-venta")}>
+          <Store size={16} /> Administrar puntos de venta
+        </SecondaryButton>
       </div>
     </div>
   );

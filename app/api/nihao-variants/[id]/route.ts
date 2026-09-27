@@ -3,7 +3,7 @@
 // Body: { saleItemId: string }
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireValidSession } from "@/lib/session";
+import { requireValidSession } from "@/lib/require-session";
 import { verifyCsrf } from "@/lib/csrf";
 import { writeAudit } from "@/lib/audit";
 import { z } from "zod";

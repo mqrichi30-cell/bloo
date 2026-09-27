@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { requireValidSession } from "@/lib/session";
+import { requireValidSession } from "@/lib/require-session";
 import { verifyCsrf } from "@/lib/csrf";
 import { saleAnularSchema } from "@/lib/validation";
 import { saleSelectFor } from "@/lib/roles";

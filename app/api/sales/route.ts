@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { requireValidSession } from "@/lib/session";
+import { requireValidSession } from "@/lib/require-session";
 import { verifyCsrf } from "@/lib/csrf";
 import { saleCreateSchema } from "@/lib/validation";
 import { deriveIvaConfigurable } from "@/lib/money";
@@ -86,7 +86,7 @@ export async function POST(request: Request) {
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "Datos inválidos" }, { status: 400 });
   }
-  const { items, totalCent, precioIncluyeIva = true, clienteNombre, formaPago, cuentaMedioPagoId } =
+  const { items, totalCent, precioIncluyeIva = true, clienteNombre, formaPago, cuentaMedioPagoId, puntoVentaId } =
     parsed.data;
 
   // Fusionar líneas duplicadas del mismo modelo (ej. si se tocó "+" dos veces
@@ -157,6 +157,23 @@ export async function POST(request: Request) {
         throw new SaleError("Ese medio de pago no existe", 400);
       }
 
+      // Punto de venta: obligatorio SOLO si hay al menos uno activo (si no
+      // hay ninguno configurado, la venta no se bloquea por esto). Si viene
+      // un id, tiene que existir y estar activo — nunca se confía en el
+      // nombre que mandó el cliente.
+      const puntoVenta = puntoVentaId
+        ? await tx.puntoVenta.findUnique({ where: { id: puntoVentaId } })
+        : null;
+      if (puntoVentaId && (!puntoVenta || !puntoVenta.activo)) {
+        throw new SaleError("Ese punto de venta no existe o ya no está activo", 400);
+      }
+      if (!puntoVentaId) {
+        const hayPuntosActivos = await tx.puntoVenta.count({ where: { activo: true } });
+        if (hayPuntosActivos > 0) {
+          throw new SaleError("Elegí dónde se vendió", 400);
+        }
+      }
+
       const sale = await tx.sale.create({
         data: {
           totalCent,
@@ -167,6 +184,7 @@ export async function POST(request: Request) {
           utilidadCent,
           clienteNombre: clienteNombre || null,
           formaPago: formaPago || medio?.nombre || null,
+          puntoVentaId: puntoVenta?.id ?? null,
           userId: session.userId!,
           items: { create: itemsData },
         },

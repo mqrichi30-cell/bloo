@@ -2,7 +2,7 @@
 // PATCH /api/nihao-variants/[id]/sell  → en [id]/route.ts
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireValidSession } from "@/lib/session";
+import { requireValidSession } from "@/lib/require-session";
 
 export async function GET(request: Request) {
   const session = await requireValidSession();

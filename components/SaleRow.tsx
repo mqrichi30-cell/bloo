@@ -11,6 +11,10 @@ export interface SaleRowTicket {
   fecha: string;
   estado: string;
   anulacionMotivo?: string | null;
+  formaPago?: string | null;
+  puntoVenta?: { id: string; nombre: string } | null;
+  /** Solo viene para admin (ver lib/roles.ts) — el vendedor ya sabe que el ticket es suyo. */
+  user?: { nombre: string } | null;
   items: { cantidad: number; model?: { nombre: string } | null }[];
 }
 
@@ -37,6 +41,12 @@ export function SaleRow({ sale, onAnular }: SaleRowProps) {
   const modelosLabel = sale.items
     .map((item) => `${item.cantidad}× ${item.model?.nombre ?? "(modelo eliminado)"}`)
     .join(", ");
+  // Detalle: medio de pago · punto de venta · vendedor (admin) — separados
+  // por "·", solo lo que exista (una venta sin medio/punto no muestra nada
+  // de eso, ver app/api/sales/route.ts).
+  const detalle = [sale.formaPago, sale.puntoVenta?.nombre, sale.user?.nombre]
+    .filter((v): v is string => Boolean(v))
+    .join(" · ");
 
   const row = (
     <div className="flex items-center justify-between gap-3 border-b border-line-200 px-5 py-3 last:border-0">
@@ -47,6 +57,7 @@ export function SaleRow({ sale, onAnular }: SaleRowProps) {
         <p className="text-caption text-ink-600">
           {fecha} · {time} · {totalUnidades} {totalUnidades === 1 ? "unidad" : "unidades"}
         </p>
+        {detalle && <p className="truncate text-caption text-ink-600">{detalle}</p>}
         {anulada && (
           <p className="mt-1 text-caption text-error-text">
             Anulada{sale.anulacionMotivo ? ` — ${sale.anulacionMotivo}` : ""}

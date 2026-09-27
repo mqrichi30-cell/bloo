@@ -3,7 +3,7 @@
 // (lib/marketplace/sync.ts), no este endpoint.
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireValidSession } from "@/lib/session";
+import { requireValidSession } from "@/lib/require-session";
 import { verifyCsrf } from "@/lib/csrf";
 import { writeAudit } from "@/lib/audit";
 import { idSchema } from "@/lib/validation";

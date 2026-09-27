@@ -76,6 +76,9 @@ export const SALE_SELECT_VENDEDOR = {
   anulacionMotivo: true,
   clienteNombre: true,
   formaPago: true,
+  // Dónde se vendió — se muestra junto a medio de pago en el detalle del
+  // ticket (SaleRow). No es dato de costo, no hay razón para ocultarlo.
+  puntoVenta: { select: { id: true, nombre: true } },
   userId: true,
   createdAt: true,
   items: { select: SALE_ITEM_SELECT_VENDEDOR },
@@ -85,6 +88,10 @@ export const SALE_SELECT_ADMIN = {
   ...SALE_SELECT_VENDEDOR,
   cogsCent: true,
   utilidadCent: true,
+  // Quién vendió (nombre, no username): el vendedor ya sabe que el ticket es
+  // suyo, así que esto solo se expone a admin — es lo que hace útil el
+  // historial cuando hay más de un vendedor.
+  user: { select: { nombre: true } },
   items: { select: SALE_ITEM_SELECT_ADMIN },
 } as const;
 

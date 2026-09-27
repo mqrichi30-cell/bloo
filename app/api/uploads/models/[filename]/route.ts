@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireValidSession } from "@/lib/session";
+import { requireValidSession } from "@/lib/require-session";
 
 // La foto vive en la DB (Model.fotoData bytea). El segmento [filename] es el id
 // del modelo (fotoUrl = /api/uploads/models/<id>?v=...). Requiere sesión.

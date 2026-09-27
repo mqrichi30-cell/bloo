@@ -3,7 +3,7 @@
 // renderizado desde docs/MARKETPLACE_COPY.md (lib/marketplace/kit.ts).
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireValidSession } from "@/lib/session";
+import { requireValidSession } from "@/lib/require-session";
 import { renderKit, kitHash } from "@/lib/marketplace/kit";
 import { CANAL_MARKETPLACE, IMAGE_VARIANTS, esEstiloNuevo, type ListingStatus } from "@/lib/marketplace/status";
 

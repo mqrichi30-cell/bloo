@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { requireValidSession } from "@/lib/session";
+import { requireValidSession } from "@/lib/require-session";
 import { ContaView } from "@/components/conta/ContaView";
 
 export default async function ContaPage() {

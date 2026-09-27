@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getSession, CSRF_COOKIE_NAME, REMEMBER_ME_TIMEOUT_MS } from "@/lib/session";
+import { getSession, CSRF_COOKIE_NAME, SESSION_MAXAGE_MS } from "@/lib/session";
 import { checkLockout, recordLoginAttempt, verifyPasswordTimingSafe, getClientIp } from "@/lib/auth";
 import { generateCsrfToken } from "@/lib/csrf";
 import { loginSchema } from "@/lib/validation";
@@ -26,7 +26,7 @@ export async function POST(request: Request) {
   // Normalizar: el teclado móvil (iOS) auto-capitaliza el primer campo -> "Admin".
   // El username es case-insensitive: lo bajamos a minúsculas + trim antes de buscar.
   const username = parsed.data.username.trim().toLowerCase();
-  const { password, rememberMe } = parsed.data;
+  const { password } = parsed.data;
 
   // Lockout keyeado SOLO por username (ver lib/auth.ts: IP es falsificable sin
   // un reverse proxy de confianza delante).
@@ -58,7 +58,9 @@ export async function POST(request: Request) {
 
   await recordLoginAttempt(username, ip, true);
 
-  // Rotar sesión: nueva sesión completa en cada login exitoso.
+  // Rotar sesión: nueva sesión completa en cada login exitoso. Sesión
+  // PERMANENTE por dispositivo (2026-09-27): se entra una vez y queda para
+  // siempre, sin checkbox de "recordarme" — ver lib/session.ts.
   const session = await getSession();
   const now = Date.now();
   const csrfToken = generateCsrfToken();
@@ -69,7 +71,10 @@ export async function POST(request: Request) {
   session.csrfToken = csrfToken;
   session.createdAt = now;
   session.lastActive = now;
-  session.rememberMe = rememberMe ?? false;
+  // Snapshot de sessionVersion: si el admin la incrementa después (password
+  // reseteado, cuenta desactivada), esta cookie deja de validar en el
+  // siguiente request — ver lib/require-session.ts.
+  session.sessionVersion = activeUser.sessionVersion;
   await session.save();
 
   const response = NextResponse.json({
@@ -83,7 +88,7 @@ export async function POST(request: Request) {
     secure: process.env.NODE_ENV === "production",
     sameSite: "strict",
     path: "/",
-    maxAge: rememberMe ? REMEMBER_ME_TIMEOUT_MS / 1000 : 60 * 60 * 24,
+    maxAge: SESSION_MAXAGE_MS / 1000,
   });
 
   return response;

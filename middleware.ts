@@ -2,10 +2,9 @@ import { NextResponse, type NextRequest } from "next/server";
 import { getIronSession } from "iron-session";
 import {
   sessionOptions,
-  isSessionExpired,
+  isSessionShapeValid,
   CSRF_COOKIE_NAME,
-  ABSOLUTE_TIMEOUT_MS,
-  REMEMBER_ME_TIMEOUT_MS,
+  SESSION_MAXAGE_MS,
   type SessionData,
 } from "@/lib/session";
 
@@ -56,12 +55,20 @@ const PUBLIC_API_PATTERNS = [
 ];
 
 /**
- * Chequeo GRUESO de sesión + bloqueo de /admin/** y /api/admin/** a no-admin.
- * También "toca" lastActive (idle timeout) en cada request autenticada, porque
- * middleware SÍ puede escribir cookies (a diferencia de Server Components).
- * Defensa en profundidad: cada handler admin vuelve a verificar
- * session.role==='admin' por su cuenta (ver lib/session.ts requireValidSession
- * + checks en cada route.ts bajo /api/admin).
+ * Chequeo GRUESO de sesión (solo forma: ¿hay userId+role en la cookie?) +
+ * bloqueo de /admin/** y /api/admin/** a no-admin. También RE-EMITE la
+ * cookie de sesión (ventana deslizante) en cada request autenticada, porque
+ * middleware SÍ puede escribir cookies (a diferencia de Server Components) —
+ * ver lib/session.ts.
+ *
+ * SESIÓN PERMANENTE POR DISPOSITIVO (2026-09-27): ya no hay timeout de
+ * inactividad ni absoluto acá. Lo que este chequeo grueso NO hace — y no
+ * puede hacer, corre en el Edge Runtime sin Prisma — es verificar
+ * `User.activo`/`User.sessionVersion` contra la base: esa es la autorización
+ * REAL y vive en requireValidSession() (lib/require-session.ts, Node
+ * runtime), que cada handler admin/protegido vuelve a llamar por su cuenta.
+ * Este middleware es defensa rápida (redirige antes de renderizar nada),
+ * nunca la única puerta.
  */
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -84,7 +91,7 @@ export async function middleware(request: NextRequest) {
   const session = await getIronSession<SessionData>(request, response, sessionOptions);
 
   const isApi = pathname.startsWith("/api");
-  const isAuthed = Boolean(session.userId && session.role) && !isSessionExpired(session);
+  const isAuthed = isSessionShapeValid(session);
 
   if (!isAuthed) {
     if (session.userId) {
@@ -106,17 +113,19 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(homeUrl);
   }
 
+  // lastActive ya no decide ninguna expiración (informativo nada más). Lo
+  // que SÍ importa acá es volver a llamar session.save(): con
+  // sessionOptions.cookieOptions.maxAge fijo en SESSION_MAXAGE_MS, cada save()
+  // reemite el Set-Cookie con ese Max-Age — esa es la ventana deslizante que
+  // mantiene la sesión viva mientras el dispositivo se siga usando (ver
+  // comentario en lib/session.ts).
   session.lastActive = Date.now();
   await session.save();
 
-  // Reemite la cookie de CSRF en cada request autenticada.
-  //
-  // Antes solo se emitía al hacer login, con 24h de vida. La sesión, en cambio,
-  // se re-guarda acá en cada request, así que su cookie es rodante. Resultado:
-  // la cookie de CSRF podía morir mientras la sesión seguía viva, y a partir de
-  // ahí toda mutación fallaba con "token de seguridad inválido" sin forma de
-  // recuperarse salvo volver a entrar. Reemitirla acá la vuelve rodante también
-  // y cierra ese hueco.
+  // Reemite la cookie de CSRF en cada request autenticada, con el mismo
+  // Max-Age rodante que la sesión — antes se fijaba una sola vez al login y
+  // podía morir mientras la sesión seguía viva (toda mutación fallaba con
+  // "token de seguridad inválido" sin forma de recuperarse salvo reentrar).
   //
   // No baja la seguridad: el valor sale de la sesión httpOnly (el navegador
   // nunca lo elige) y verifyCsrf sigue exigiendo que el header coincida con la
@@ -127,7 +136,7 @@ export async function middleware(request: NextRequest) {
       secure: process.env.NODE_ENV === "production",
       sameSite: "strict",
       path: "/",
-      maxAge: session.rememberMe ? REMEMBER_ME_TIMEOUT_MS / 1000 : ABSOLUTE_TIMEOUT_MS / 1000,
+      maxAge: SESSION_MAXAGE_MS / 1000,
     });
   }
 

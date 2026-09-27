@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireValidSession } from "@/lib/session";
+import { requireValidSession } from "@/lib/require-session";
 import { periodQuerySchema } from "@/lib/validation";
 import { getAppConfig } from "@/lib/config";
 import { cuentasConSaldo, pedidosPorPagar } from "@/lib/conta";

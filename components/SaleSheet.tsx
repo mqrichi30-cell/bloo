@@ -23,6 +23,17 @@ interface MedioPago {
   nombre: string;
 }
 
+interface PuntoVenta {
+  id: string;
+  nombre: string;
+}
+
+// Preselección del último punto usado en ESTE dispositivo (opcional, ver
+// tarea): solo azúcar de UX, el servidor igual valida que el id exista y
+// esté activo — si el punto se borró o desactivó, simplemente no matchea y
+// no se preselecciona nada.
+const ULTIMO_PUNTO_VENTA_KEY = "bloo_ultimo_punto_venta";
+
 interface SaleSheetProps {
   open: boolean;
   onClose: () => void;
@@ -40,6 +51,8 @@ export function SaleSheet({ open, onClose, onSuccess }: SaleSheetProps) {
   const [totalEditedManually, setTotalEditedManually] = useState(false);
   const [medios, setMedios] = useState<MedioPago[]>([]);
   const [medioId, setMedioId] = useState<string | null>(null);
+  const [puntos, setPuntos] = useState<PuntoVenta[]>([]);
+  const [puntoVentaId, setPuntoVentaId] = useState<string | null>(null);
 
   // Reference prices for auto-suggestion
   const [lentesPrice, setLentesPrice] = useState(0);
@@ -70,6 +83,7 @@ export function SaleSheet({ open, onClose, onSuccess }: SaleSheetProps) {
     setTotalCent(0);
     setTotalEditedManually(false);
     setMedioId(null);
+    setPuntoVentaId(null);
     setPickedPairs([]);
     setPickedEstuches([]);
     setPairSelected(null);
@@ -81,6 +95,15 @@ export function SaleSheet({ open, onClose, onSuccess }: SaleSheetProps) {
     apiFetch<{ medios: MedioPago[] }>("/api/medios-pago")
       .then((d) => setMedios(d.medios))
       .catch(() => setMedios([]));
+
+    apiFetch<{ puntos: PuntoVenta[] }>("/api/puntos-venta")
+      .then((d) => {
+        setPuntos(d.puntos);
+        const ultimo =
+          typeof window !== "undefined" ? window.localStorage.getItem(ULTIMO_PUNTO_VENTA_KEY) : null;
+        if (ultimo && d.puntos.some((p) => p.id === ultimo)) setPuntoVentaId(ultimo);
+      })
+      .catch(() => setPuntos([]));
 
     // Load models just for price suggestions and estuche list
     apiFetch<{ models: PickableModel[] }>("/api/models?activo=true")
@@ -193,8 +216,13 @@ export function SaleSheet({ open, onClose, onSuccess }: SaleSheetProps) {
           totalCent,
           precioIncluyeIva: true,
           ...(medioId ? { cuentaMedioPagoId: medioId } : {}),
+          ...(puntoVentaId ? { puntoVentaId } : {}),
         }),
       });
+
+      if (puntoVentaId && typeof window !== "undefined") {
+        window.localStorage.setItem(ULTIMO_PUNTO_VENTA_KEY, puntoVentaId);
+      }
 
       // Assign nihao variants to saleItems (1:1 by order)
       const lentesSaleItems = data.sale.items.filter((si) =>
@@ -238,7 +266,8 @@ export function SaleSheet({ open, onClose, onSuccess }: SaleSheetProps) {
   const canContinuar =
     (lentesQty > 0 || estucheQty > 0) &&
     totalCent > 0 &&
-    (medios.length === 0 || medioId !== null);
+    (medios.length === 0 || medioId !== null) &&
+    (puntos.length === 0 || puntoVentaId !== null);
 
   return (
     <BottomSheet open={open} onClose={onClose} title={title}>
@@ -279,6 +308,32 @@ export function SaleSheet({ open, onClose, onSuccess }: SaleSheetProps) {
                       }`}
                     >
                       {medio.nombre}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {puntos.length > 0 && (
+            <div className="flex flex-col gap-2">
+              <span className="text-label text-ink-900">¿Dónde se vendió?</span>
+              <div className="flex flex-wrap gap-2">
+                {puntos.map((punto) => {
+                  const selected = punto.id === puntoVentaId;
+                  return (
+                    <button
+                      key={punto.id}
+                      type="button"
+                      aria-pressed={selected}
+                      onClick={() => setPuntoVentaId(punto.id)}
+                      className={`min-h-[44px] rounded-full border px-4 text-body transition-transform active:scale-[0.97] ${
+                        selected
+                          ? "border-navy-900 bg-navy-900 text-white"
+                          : "border-line-200 bg-white text-ink-900"
+                      }`}
+                    >
+                      {punto.nombre}
                     </button>
                   );
                 })}

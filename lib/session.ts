@@ -9,14 +9,35 @@ export interface SessionData {
   role?: Role;
   nombre?: string;
   csrfToken?: string;
-  createdAt?: number; // epoch ms — para timeout absoluto
-  lastActive?: number; // epoch ms — para timeout de inactividad (30min, ignorado si rememberMe)
-  rememberMe?: boolean; // si true: timeout 30 días absoluto, sin idle check
+  createdAt?: number; // epoch ms — informativo, ya no expira la sesión
+  lastActive?: number; // epoch ms — informativo, ya no expira la sesión
+  // Snapshot de User.sessionVersion al momento del login. Se revalida contra
+  // la base en cada request (requireValidSession): si no coincide, alguien
+  // (el propio admin) invalidó esta sesión a propósito — ver comentario abajo.
+  sessionVersion?: number;
 }
 
-export const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
-export const ABSOLUTE_TIMEOUT_MS = 24 * 60 * 60 * 1000;
-export const REMEMBER_ME_TIMEOUT_MS = 30 * 24 * 60 * 60 * 1000;
+// SESIÓN PERMANENTE POR DISPOSITIVO (2026-09-27, decisión de Cris): se entra
+// UNA vez y queda para siempre, sin timeout de inactividad ni absoluto. Los
+// navegadores topan cualquier cookie en ~400 días sin importar el Max-Age que
+// se pida — por eso la sesión se RE-EMITE (ventana deslizante) en cada
+// request autenticado en vez de fijarse una sola vez al login: mientras el
+// dispositivo siga usándose al menos una vez cada 400 días, nunca expira.
+// Ver middleware.ts (único lugar que puede escribir cookies en cada request).
+//
+// Como la sesión ya no expira sola, la ÚNICA forma de cerrar sesiones que ya
+// están abiertas en otros dispositivos es invalidarlas del lado del servidor:
+//   (a) `User.activo=false` — cuenta desactivada.
+//   (b) `User.sessionVersion` no coincide con el de la cookie — se incrementa
+//       al cambiar/resetear el password y al desactivar al usuario.
+// Ambas se revisan en requireValidSession() (lib/require-session.ts — Node
+// runtime: Server Components y Route Handlers), NO acá ni en middleware.ts:
+// este archivo lo importa middleware.ts, que corre en el Edge Runtime de
+// Next 14 y no puede bundlear Prisma (motor nativo). Por eso ese chequeo
+// vive en un módulo aparte que este archivo no importa. El chequeo grueso de
+// middleware (¿hay cookie de sesión con forma válida?) sigue siendo solo
+// eso: la autorización real es SIEMPRE requireValidSession(), igual que antes.
+export const SESSION_MAXAGE_MS = 400 * 24 * 60 * 60 * 1000;
 
 // Validación LAZY: solo al usarse en runtime (no al importar el módulo), para
 // que `next build` pueda importar rutas sin exigir el secreto en build-time.
@@ -40,7 +61,7 @@ export const sessionOptions = {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "strict" as const,
-    maxAge: REMEMBER_ME_TIMEOUT_MS / 1000,
+    maxAge: SESSION_MAXAGE_MS / 1000,
     path: "/",
   },
 };
@@ -51,26 +72,13 @@ export async function getSession(): Promise<IronSession<SessionData>> {
   return getIronSession<SessionData>(cookies(), sessionOptions);
 }
 
-export function isSessionExpired(session: Pick<SessionData, "createdAt" | "lastActive" | "rememberMe">): boolean {
-  if (!session.createdAt || !session.lastActive) return true;
-  const now = Date.now();
-  if (session.rememberMe) {
-    return now - session.createdAt > REMEMBER_ME_TIMEOUT_MS;
-  }
-  if (now - session.createdAt > ABSOLUTE_TIMEOUT_MS) return true;
-  if (now - session.lastActive > IDLE_TIMEOUT_MS) return true;
-  return false;
-}
-
 /**
- * Sesión válida y no expirada (idle 30min / absoluto 24h). SOLO LECTURA: no
- * mutila cookies acá (Next.js prohíbe escribir cookies fuera de Route
- * Handlers/Server Actions). El "touch" de lastActive ocurre en middleware.ts,
- * que corre en cada request y sí puede escribir la cookie de sesión.
+ * Forma mínima de una cookie de sesión con datos (sin esto, no hay nadie
+ * logueado). Es SOLO el chequeo de forma — no consulta la base, así que NO
+ * es suficiente para autorizar nada por sí sola (ver requireValidSession en
+ * lib/require-session.ts, que sí es la autorización real). Este chequeo
+ * liviano es el que puede correr en middleware.ts (Edge Runtime).
  */
-export async function requireValidSession(): Promise<IronSession<SessionData> | null> {
-  const session = await getSession();
-  if (!session.userId || !session.role) return null;
-  if (isSessionExpired(session)) return null;
-  return session;
+export function isSessionShapeValid(session: Pick<SessionData, "userId" | "role">): boolean {
+  return Boolean(session.userId && session.role);
 }

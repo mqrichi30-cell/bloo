@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { requireValidSession } from "@/lib/session";
+import { requireValidSession } from "@/lib/require-session";
 
 export default async function RootPage() {
   const session = await requireValidSession();

@@ -1,5 +1,5 @@
 import { redirect, notFound } from "next/navigation";
-import { requireValidSession } from "@/lib/session";
+import { requireValidSession } from "@/lib/require-session";
 import { prisma } from "@/lib/prisma";
 import { modelSelectFor } from "@/lib/roles";
 import { AppHeader } from "@/components/AppHeader";

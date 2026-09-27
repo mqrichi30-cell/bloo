@@ -56,6 +56,15 @@ model User {
   activo       Boolean  @default(true)
   createdAt    DateTime @default(now())
 
+  // Se compara contra `session.sessionVersion` en cada request autenticado
+  // (middleware.ts) — sesión permanente por dispositivo (2026-09-27): sin
+  // timeout de inactividad ni absoluto, la ÚNICA forma de cerrar sesiones ya
+  // abiertas en otros dispositivos es invalidarlas server-side. Se incrementa
+  // al cambiar/resetear el password y al desactivar (`activo=false`) al
+  // usuario; un valor que no coincide con el guardado en la cookie destruye
+  // esa sesión en el siguiente request. NO se decrementa nunca.
+  sessionVersion Int    @default(0)
+
   lotes               Lote[]
   sales               Sale[]               @relation("SaleVendedor")
   // Tickets que ESTE usuario anuló (no que vendió). Relación aparte de
@@ -320,6 +329,16 @@ model Sale {
   clienteId     String?
   formaPago     String?
 
+  // Dónde se vendió (2026-09-27). Nullable: las ventas históricas (previas a
+  // este campo) quedan en null, no se inventa un punto de venta para ellas.
+  // Obligatorio en el flujo SOLO si hay ≥1 PuntoVenta activo — ver
+  // app/api/sales/route.ts. ON DELETE SET NULL: un punto que se borra de
+  // verdad (sin ventas propias, ver PuntoVenta) no puede arrastrar consigo
+  // ventas que sí tuvo otro punto homónimo reutilizado; si el punto SÍ tiene
+  // ventas, el borrado es lógico (activo=false) y esto nunca se dispara.
+  puntoVentaId String?
+  puntoVenta   PuntoVenta? @relation(fields: [puntoVentaId], references: [id], onDelete: SetNull)
+
   userId String
   user   User   @relation("SaleVendedor", fields: [userId], references: [id])
 
@@ -334,6 +353,23 @@ model Sale {
   // seq scan sobre toda la tabla en cada corte.
   @@index([estado, fecha])
   @@index([anuladaPorUserId])
+  @@index([puntoVentaId])
+}
+
+// Punto de venta físico (feria, tienda, evento). Catálogo simple de admin:
+// CRUD en /puntos-venta (solo admin). Nunca se borra si tiene ventas propias
+// (soft delete con `activo=false`, ver app/api/admin/puntos-venta) — igual
+// espíritu que Model.activo: lo que ya se usó en una venta no puede
+// desaparecer del histórico, aunque deje de ofrecerse al vender.
+model PuntoVenta {
+  id        String   @id @default(uuid())
+  nombre    String   @unique
+  activo    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  sales Sale[]
+
+  @@index([activo])
 }
 
 // Línea de un ticket: un modelo + cantidad dentro de una Sale. Inmutable.
