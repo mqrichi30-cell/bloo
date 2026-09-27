@@ -42,7 +42,7 @@ PROMPT = """You are a strict QA reviewer for an e-commerce catalog photo of ONE 
 IMAGE 1 is the REFERENCE: the real product cut out on white. IMAGE 2 is the OUTPUT catalog photo you must review.
 Check the OUTPUT against every item:
 1. exactly ONE pair of sunglasses is visible (count lens pairs, frames and temple arms);
-2. no reflection, mirror image, duplicate, second frame or ghost of the glasses anywhere (e.g. an upside-down copy under the glasses);
+2. no reflection, mirror image, duplicate, second frame or ghost of the glasses anywhere (e.g. an upside-down copy under the glasses on the surface). NOT a defect: parts of the same frame (e.g. the far temple arm) visible THROUGH a transparent or tinted lens, or normal light glare on the lens;
 3. the glasses rest on the linen with a plausible contact shadow (not floating);
 4. frame shape, frame color/pattern and lens tint match the REFERENCE;
 5. no hands, fingers or people;
