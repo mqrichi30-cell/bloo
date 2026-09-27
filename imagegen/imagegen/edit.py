@@ -63,6 +63,42 @@ EDIT_PROMPTS: dict[str, str] = {
 }
 
 
+# fed back into the next attempt's prompt when an attempt fails (local checks or the AI reviewer)
+_FIXES: list[tuple[tuple[str, ...], str]] = [
+    (("reflection", "duplicate", "mirror", "second pair", "glasses_count", "ghost"),
+     "Show exactly one single pair of sunglasses. The linen is matte and non-reflective: no reflection, "
+     "no mirror image, no upside-down copy, no second pair, no ghost of the glasses."),
+    (("floating",), "The sunglasses sit on the linen and touch it, with a soft dark contact shadow right "
+                    "under the frame and the temple tips."),
+    (("product_differs", "silhouette", "pose", "colour", "tone"),
+     "Do not change the sunglasses at all: identical outline, frame colour, pattern and lens tint as in "
+     "image 0, same size and position."),
+    (("hand",), "No hands, no fingers, no people."),
+    (("text", "watermark", "logo"), "No text, letters, watermark or logo anywhere in the image."),
+    (("warped", "extra"), "No warped or melted parts, no extra temple arms, no extra lenses."),
+    (("too large",), "Keep the sunglasses at the same size as in image 0, with space around them."),
+]
+_SCENE_FIX = {
+    "hero": "The scene must clearly show the beige linen, a folded navy linen napkin and one monstera leaf.",
+    "flatlay": "The scene must clearly show beige linen, a small navy dish and one palm leaf.",
+    "detail": "The scene must clearly show beige linen and one tropical leaf.",
+}
+
+
+def correction_prompt(variant: str, defects: list[str], hint: str = "") -> str:
+    """Edit prompt for a retry: the variant prompt plus explicit negatives for the defects seen."""
+    base = EDIT_PROMPTS.get(variant, EDIT_PROMPTS["hero"])
+    low = " ".join(defects).lower()
+    fixes = [txt for keys, txt in _FIXES if any(k in low for k in keys)]
+    if "scene" in low or "linen" in low:
+        fixes.append(_SCENE_FIX.get(variant, _SCENE_FIX["hero"]))
+    hint = " ".join(str(hint).split())[:160]
+    if hint and hint[-1] not in ".!?":
+        hint += "."
+    extra = " ".join(dict.fromkeys(fixes)) + (" " + hint if hint else "")
+    return base + (" Important corrections: " + extra.strip() if extra.strip() else "")
+
+
 # ------------------------------------------------------------------ reference image
 def main_product(alpha: np.ndarray) -> np.ndarray:
     """Alpha with only the main pair of glasses. Some Nihao photos show the same frame twice

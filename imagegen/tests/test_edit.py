@@ -164,6 +164,22 @@ class FakeEditor:
         self.exhausted = reset_at
 
 
+class FakeReviewer:
+    def __init__(self, verdicts: list[Any] | None = None) -> None:
+        self.verdicts = verdicts or []
+        self.calls = 0
+
+    def configured(self) -> bool:
+        return True
+
+    def review(self, ref: Image.Image, out: Image.Image, variant: str = "hero") -> dict[str, Any]:
+        self.calls += 1
+        v = self.verdicts.pop(0) if self.verdicts else {"pass": True, "defects": [], "fix_hint": ""}
+        if isinstance(v, Exception):
+            raise v
+        return {"model": "fake", "neurons": 11.0, **v}
+
+
 class EditSceneTests(unittest.TestCase):
     def setUp(self) -> None:
         self.cut = glasses()
@@ -176,22 +192,24 @@ class EditSceneTests(unittest.TestCase):
         masks = [self.bad_a, self.good_a]
         ed = FakeEditor([self.bad, self.good])
         with mock.patch.object(run, "segment_alpha", side_effect=lambda img: masks.pop(0)):
-            outs, meta = run.edit_scene(self.cut, "hero", ed)  # type: ignore[arg-type]
+            outs, meta = run.edit_scene(self.cut, "hero", ed, FakeReviewer())  # type: ignore[arg-type]
         self.assertIsNotNone(outs)
         self.assertEqual(ed.calls, 2)
         self.assertFalse(meta["attempts"][0]["ok"])
         self.assertTrue(meta["attempts"][1]["ok"])
 
-    def test_two_rejections_return_none(self) -> None:
-        ed = FakeEditor([self.bad, self.bad])
+    def test_three_rejections_return_none(self) -> None:
+        ed = FakeEditor([self.bad, self.bad, self.bad])
+        rv = FakeReviewer()
         with mock.patch.object(run, "segment_alpha", return_value=self.bad_a):
-            outs, meta = run.edit_scene(self.cut, "hero", ed)  # type: ignore[arg-type]
+            outs, meta = run.edit_scene(self.cut, "hero", ed, rv)  # type: ignore[arg-type]
         self.assertIsNone(outs)
-        self.assertEqual(len(meta["attempts"]), 2)
+        self.assertEqual(len(meta["attempts"]), 3)
+        self.assertEqual(rv.calls, 0)  # the AI reviewer only sees images that passed the local checks
 
     def test_quota_returns_none_and_marks_exhausted(self) -> None:
         ed = FakeEditor([QuotaExhausted(123.0, "neurons")])
-        outs, meta = run.edit_scene(self.cut, "hero", ed)  # type: ignore[arg-type]
+        outs, meta = run.edit_scene(self.cut, "hero", ed, FakeReviewer())  # type: ignore[arg-type]
         self.assertIsNone(outs)
         self.assertEqual(ed.exhausted, 123.0)
         self.assertIn("quota", meta["skipped"])

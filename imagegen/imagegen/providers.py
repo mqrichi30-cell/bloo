@@ -182,6 +182,7 @@ class TogetherFlux(Provider):
 # (checked 2026-09-25). Tiles are counted per started 512x512 tile (conservative).
 CF_NEURON_BUDGET = float(env("CF_NEURON_BUDGET", "9500") or 9500)  # keep ~5 % headroom under 10k
 CF_LEDGER = "cf_neurons"  # state key (global: the quota belongs to the account, not the host)
+REVIEW_NEURON_RESERVE = 20.0  # one Gemma 4 vision review (~11 neurons measured), see review.py
 
 
 def _tiles(w: int, h: int) -> int:
@@ -280,7 +281,8 @@ class CloudflareEdit(Provider):
     def available(self) -> bool:
         led = cf_ledger(self.root)
         cheapest = min((cf_neurons(m, 1024, 1280, [(511, 511)]) for m in self.models), default=1e9)
-        return super().available() and float(led["used"]) + cheapest <= CF_NEURON_BUDGET
+        # every edit is followed by an AI vision review (review.py) on the same account
+        return super().available() and float(led["used"]) + cheapest + REVIEW_NEURON_RESERVE <= CF_NEURON_BUDGET
 
     def edit(self, prompt: str, ref: Image.Image, size: tuple[int, int], seed: int,
              model: str | None = None) -> tuple[Image.Image, str]:
