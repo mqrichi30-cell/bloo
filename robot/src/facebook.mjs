@@ -202,12 +202,37 @@ export async function findListingUrl(page, title, base = FB_BASE, opts = {}) {
       // Título exacto sin enlace visible: abrirlo y leer la URL.
       await page.getByText(cleanTitle(title), { exact: true }).first().click();
       await page.waitForURL(/\/marketplace\/item\/\d+/, { timeout: 15_000 }).catch(() => {});
-      const u = normalizeItemUrl(page.url(), base);
+      const u = normalizeItemUrl(page.url(), base) || (await idFromListingDialog(page, title, base));
       if (u) return u;
     }
     if (i < attempts - 1) await pause(4000, 8000); // la publicación nueva puede tardar en aparecer
   }
   return null;
+}
+
+/**
+ * En "Tus publicaciones" la tarjeta abre el diálogo "Tu publicación" en vez de navegar al ítem.
+ * Saca el id de ese diálogo (solo si muestra el título EXACTO): primero un enlace al ítem; si no hay,
+ * "Editar publicación" navega a /marketplace/edit/?listing_id=<id>. Nunca guarda nada en la edición.
+ * @param {Page} page @param {string} title @param {string} base @returns {Promise<string|null>}
+ */
+async function idFromListingDialog(page, title, base) {
+  const dlg = page.getByRole("dialog").filter({ hasText: cleanTitle(title) }).first();
+  if (!(await dlg.isVisible().catch(() => false))) return null;
+  const href = await dlg
+    .locator('a[href*="/marketplace/item/"]')
+    .first()
+    .getAttribute("href", { timeout: 2000 })
+    .catch(() => null);
+  const fromLink = href ? normalizeItemUrl(href, base) : null;
+  if (fromLink) return fromLink;
+  const edit = await firstVisible([dlg.getByRole("button", { name: /Editar publicaci[oó]n/i }), dlg.getByText(/^Editar publicaci[oó]n$/i)], 3000);
+  if (!edit) return null;
+  await edit.click();
+  await page.waitForURL(/listing_id=\d+|\/marketplace\/(item|edit)\/\d+/, { timeout: 15_000 }).catch(() => {});
+  const m = page.url().match(/listing_id=(\d+)|\/marketplace\/(?:item|edit)\/(\d+)/);
+  const id = m && (m[1] || m[2]);
+  return id ? `${base}/marketplace/item/${id}/` : null;
 }
 
 /** Ids con título exacto que ya existen (antes de publicar). Nunca falla. @param {Page} page @param {string} title @param {string} base */
