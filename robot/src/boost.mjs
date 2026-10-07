@@ -284,6 +284,15 @@ async function setBudget(p, scope, amount) {
 /** @param {Money} m */
 const fmt = (m) => `${m.currency === "CRC" ? "₡" : m.currency === "USD" ? "US$" : ""}${m.amount} ${m.currency}`;
 
+/** IVA de Costa Rica sobre la pauta: el dueño aprobó pagar el presupuesto + 13 % (2026-10-07). */
+export const IVA_PAUTA = 0.13;
+/** @param {number} amountCrc */
+export const conIva = (amountCrc) => Math.round(amountCrc * (1 + IVA_PAUTA));
+/** Total aceptable: CRC y exactamente el presupuesto, o el presupuesto + IVA (±₡2 por redondeo).
+ *  @param {{amount: number, currency: string}} t @param {number} amountCrc */
+export const totalPermitido = (t, amountCrc) =>
+  t.currency === "CRC" && (t.amount === amountCrc || Math.abs(t.amount - conIva(amountCrc)) <= 2);
+
 /**
  * Promociona una publicación ya creada. Nunca lanza.
  * @param {Page} page
@@ -345,7 +354,7 @@ export async function promocionar(page, listingUrl, cfg, opts = {}) {
         return await fail(`Meta exige un mínimo de ${fmt(min)} (pedido ₡${amountCrc}); no se pagó`);
       }
       const total = readBoostTotal(text);
-      if (budgetSet && total && (total.currency !== "CRC" || total.amount !== amountCrc)) {
+      if (budgetSet && total && !totalPermitido(total, amountCrc)) {
         return await fail(`El total mostrado es ${fmt(total)}, no ₡${amountCrc} CRC; no se pagó`);
       }
 
@@ -356,7 +365,7 @@ export async function promocionar(page, listingUrl, cfg, opts = {}) {
         const finalText = await scope.innerText().catch(() => "");
         const t = readBoostTotal(finalText);
         if (!t) return await fail("No pude leer el total en la pantalla final; no se pagó");
-        if (t.currency !== "CRC" || t.amount !== amountCrc) return await fail(`El total final es ${fmt(t)}, no ₡${amountCrc} CRC; no se pagó`);
+        if (!totalPermitido(t, amountCrc)) return await fail(`El total final es ${fmt(t)}, no ₡${amountCrc} (ni ₡${conIva(amountCrc)} con IVA) CRC; no se pagó`);
         const btn = ((await confirm.innerText().catch(() => "")) || "").trim();
 
         if (cfg.mode === "dry") {

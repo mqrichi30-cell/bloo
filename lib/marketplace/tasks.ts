@@ -67,6 +67,11 @@ export const ROBOT_PACING_MINUTES = 110;
  *  día para que haya pauta diaria. Env ROBOT_PUBLISH_PACING_MINUTES (default
  *  1440). 'quitar' (stock agotado) no espera esto, solo el ritmo general. */
 export function publishPacingMinutes(): number {
+  // Ventana temporal opcional: ROBOT_PUBLISH_PACING_OVERRIDE="<min>@<ISO hasta>" (p. ej. para
+  // adelantar UNA publicación); vencida, vuelve sola al ritmo normal sin redeploy.
+  const [ovMin, ovHasta] = String(process.env.ROBOT_PUBLISH_PACING_OVERRIDE || "").split("@");
+  const hasta = Date.parse(ovHasta || "");
+  if (Number(ovMin) >= ROBOT_PACING_MINUTES && Number.isFinite(hasta) && Date.now() < hasta) return Number(ovMin);
   const n = Number(process.env.ROBOT_PUBLISH_PACING_MINUTES);
   return Number.isFinite(n) && n >= ROBOT_PACING_MINUTES ? n : 1440;
 }
