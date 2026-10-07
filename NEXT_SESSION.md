@@ -8,6 +8,14 @@
 - susan/ashley creadas en prod (vendedor, activo). **BLOQUEADO: no hay `/api/auth/forgot` ni `lib/mailer.ts` en el código** (solo documentados en `.env.example` como si existieran) y no hay SMTP configurado en Netlify — no pueden entrar hasta que alguien construya el flujo de reset por correo o Cris les dé una contraseña a mano.
 - Deploy: el auto-deploy de Netlify por push a `master` está roto desde antes de esta sesión (`npm ci` falla en su CI con exit code 2 en varios commits previos, incluyendo el HEAD anterior a este). Se deployó a mano con `netlify deploy --build --prod` (mismo mecanismo que los últimos deploys "ready" del historial). Alguien necesita mirar el log de build de Netlify (la CLI no expone el texto completo) para arreglar el auto-deploy.
 
+## 2026-10-07 — Prueba de 5 en curso (Jarvis)
+- Hechas: Corobicí y Limón (₡17.500, 2 fotos, SIN logo, sin pauta). Pendientes: Nosara, Osa, Sierpe (fotos ya con logo).
+- Ritmo: publicar/reemplazar 1 cada 24 h (ROBOT_PUBLISH_PACING_MINUTES=1440); quitar 110 min.
+- Logo: opción A (navy, centrado abajo, 20% ancho, 80% opacidad) estampado en imagegen/brand.py DESPUÉS del revisor IA. Estuche fijo ya con logo.
+- Pauta: aún NO probada en dry (falló encontrar botón; fix firstVisible visibles). Meta: cuenta en ₡, saldo ₡3.776, límite de cuenta ₡3.300 (sin IVA). Ojo IVA 13%: el robot exige total exacto ₡500 → ver captura de la 1ra pauta dry.
+- Fixes robot 07-oct: scroll hasta el final, id desde diálogo "Tu publicación", encuesta "Prefiero no responder", excluir la vieja al ubicar la nueva.
+- Resto (52) solo cuando Cris diga.
+
 ## 2026-10-06 — GPT Sunburst + estuche fijo + pauta ₡500 + reemplazo (commit local ab4cfc7, SIN push)
 - Fotos: solo hero, OpenAI gpt-image-2.5-sunburst calidad max, 1 intento pagado (respaldo cfedit). Sin delay en IA; delay solo robot FB (~110 min).
 - Publicación = [hero, foto fija estuche `fixed/estuche-estandar-4x5.jpg`]. Precio Marketplace ₡17.500 (env MARKETPLACE_PRICE_CRC); POS sigue ₡16.500.
