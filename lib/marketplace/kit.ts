@@ -15,10 +15,43 @@ const WHATSAPP_BASE = "https://wa.me/50689433677";
 const WHATSAPP_OTROS_ESTILOS = `${WHATSAPP_BASE}?text=Hola%20bloo%2C%20quiero%20ver%20otros%20estilos`;
 const TITULO_MAX = 60;
 
+/**
+ * Precio de los lentes EN MARKETPLACE (decisión del dueño 2026-10-06): ₡17.500,
+ * fijo para todos los colores (env MARKETPLACE_PRICE_CRC). Es SOLO del kit/robot: NO es Model.precioVentaCent,
+ * que sigue siendo la sugerencia del POS (₡16.500 = lente + estuche estándar +
+ * paño, armado así por scripts/2026-09-19-precios-bundle-y-retiro-propietario.ts)
+ * y no se toca desde acá. Céntimos, entero.
+ * Cambiarlo cambia kitHash: las publicadas aparecen "kit desactualizado" en el
+ * panel hasta que se reemplazan (scripts/2026-10-06-reemplazo-publicaciones.ts).
+ */
+export const PRECIO_MARKETPLACE_DEFAULT_CRC = 17_500;
+
+/**
+ * Precio Marketplace en céntimos. Override por env MARKETPLACE_PRICE_CRC
+ * (colones enteros, ej. 17500) para cambiarlo sin deploy de código; un valor
+ * inválido cae al default (nunca se publica un precio raro por un typo).
+ */
+export function precioMarketplaceCent(): number {
+  const raw = process.env.MARKETPLACE_PRICE_CRC?.trim();
+  const crc = raw ? Number(raw) : PRECIO_MARKETPLACE_DEFAULT_CRC;
+  if (!Number.isInteger(crc) || crc < 1_000 || crc > 1_000_000) {
+    console.warn(`[kit] MARKETPLACE_PRICE_CRC inválido ('${raw}'): se usa ${PRECIO_MARKETPLACE_DEFAULT_CRC}`);
+    return PRECIO_MARKETPLACE_DEFAULT_CRC * 100;
+  }
+  return crc * 100;
+}
+
+/** Entrada del kit para un modelo, con el precio de Marketplace (no el del POS). */
+export function kitInputDe(m: { nombre: string; color: string | null; material: string | null }): KitInput {
+  return { nombre: m.nombre, color: m.color, material: m.material, precioVentaCent: precioMarketplaceCent() };
+}
+
 export interface KitInput {
   nombre: string;
   color: string | null;
   material: string | null;
+  /** Precio que se imprime en el kit. Usar kitInputDe(): es el de Marketplace,
+   *  no Model.precioVentaCent. (Nombre histórico del campo.) */
   precioVentaCent: number;
 }
 

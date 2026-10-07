@@ -75,3 +75,62 @@ test("api: 404 → ApiNotDeployedError; manda el header", async () => {
   srv.close();
   assert.throws(() => createApi({ baseUrl: "http://bloo.example.com", secret: "x" }), /https/);
 });
+
+import { parseAmount, findMoney, readBoostTotal, readMinimum, detectPaymentSetup, isAlreadyPromoted, parseBoostConfig } from "../src/boost.mjs";
+import { photoCount } from "../src/facebook.mjs";
+
+test("pauta: montos es-CR / en-US", () => {
+  assert.equal(parseAmount("500"), 500);
+  assert.equal(parseAmount("500,00"), 500);
+  assert.equal(parseAmount("1.000"), 1000);
+  assert.equal(parseAmount("1,000.50"), 1000.5);
+  assert.equal(parseAmount("1.000,00"), 1000);
+  assert.equal(parseAmount("2.500.000"), 2500000);
+  assert.equal(parseAmount("abc"), null);
+  assert.deepEqual(
+    findMoney("₡500 durante 1 día · US$1.25 · 3.000 CRC").map((m) => [m.amount, m.currency]),
+    [[500, "CRC"], [1.25, "USD"], [3000, "CRC"]]
+  );
+});
+
+test("pauta: lee el total y el mínimo", () => {
+  assert.deepEqual(readBoostTotal("Duración: 1 día\nTotal: ₡500").amount, 500);
+  assert.equal(readBoostTotal("Total\n₡14.000").amount, 14000);
+  assert.equal(readBoostTotal("Presupuesto total\n₡500,00 CRC").currency, "CRC");
+  assert.equal(readBoostTotal("Total a pagar US$5.00").currency, "USD");
+  assert.equal(readBoostTotal("Presupuesto diario ₡2.000"), null);
+  assert.equal(readMinimum("El presupuesto mínimo es ₡1.000").amount, 1000);
+  assert.equal(readMinimum("Duración mínima: 1 día"), null);
+});
+
+test("pauta: detecta pedir tarjeta / método de pago nuevo", () => {
+  assert.match(detectPaymentSetup({ text: "Agregar método de pago" }), /método de pago/);
+  assert.match(detectPaymentSetup({ text: "Add payment method" }), /método de pago/);
+  assert.match(detectPaymentSetup({ text: "Número de tarjeta" }), /tarjeta/);
+  assert.match(detectPaymentSetup({ text: "Visa •••• 4242", hasCardInput: true }), /tarjeta/);
+  // método ya guardado con enlace opcional "Agregar método de pago": NO bloquea
+  assert.equal(detectPaymentSetup({ text: "Método de pago\nVisa •••• 4242\nAgregar método de pago" }), null);
+  assert.equal(detectPaymentSetup({ text: "Total: ₡500\nPromocionar ahora" }), null);
+});
+
+test("pauta: ya promocionada / config del payload", () => {
+  assert.ok(isAlreadyPromoted("Promoción en revisión"));
+  assert.ok(isAlreadyPromoted("Your boost is active"));
+  assert.ok(!isAlreadyPromoted("Promocionar publicación\nMarcar como agotado"));
+  assert.equal(parseBoostConfig(null), null);
+  assert.deepEqual(parseBoostConfig({ mode: "dry", amountCrc: 500 }), { ok: true, cfg: { mode: "dry", amountCrc: 500 } });
+  assert.equal(parseBoostConfig({ mode: "on", amountCrc: 5000 }).ok, false);
+  assert.equal(parseBoostConfig({ mode: "yes", amountCrc: 500 }).ok, false);
+  assert.equal(parseBoostConfig({ mode: "on", amountCrc: 499.5 }).ok, false);
+});
+
+test("fotos: contador N/10", () => {
+  assert.equal(photoCount("Fotos · 2/10 · Puedes agregar hasta 10 fotos."), 2);
+  assert.equal(photoCount("2 / 10 - Agregar fotos"), 2);
+  assert.equal(photoCount("Precio ₡15.000"), null);
+});
+
+test("imágenes: más de 10 → error (no se recorta en silencio)", async () => {
+  const urls = Array.from({ length: 11 }, (_, i) => `https://xwiiwqrvxffafgvzypyd.supabase.co/${i}.png`);
+  await assert.rejects(downloadImages(urls, { fetchImpl: async () => new Response("") }), /admite 10/);
+});

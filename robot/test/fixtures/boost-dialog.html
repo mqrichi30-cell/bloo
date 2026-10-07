@@ -1,0 +1,69 @@
+<!-- Stub local del flujo "Promocionar publicación" (NO es Facebook). Se incrusta en la página de la publicación.
+     Escenarios (window.BOOST_SCENARIO): ok | min (Meta exige ₡1.000) | usd (cuenta en dólares) | card (pide tarjeta nueva). -->
+<button id="bopen">Promocionar publicación</button>
+<div role="dialog" aria-label="Promocionar publicación" id="bd" hidden>
+  <h2>Promocionar publicación</h2>
+  <section id="b1">
+    <div role="radiogroup" aria-label="Tipo de presupuesto">
+      <div role="radio" aria-checked="true" tabindex="0" id="rd">Presupuesto diario</div>
+      <div role="radio" aria-checked="false" tabindex="0" id="rt">Presupuesto total</div>
+    </div>
+    <label>Duración <select id="dur"><option>7 días</option><option>3 días</option><option>1 día</option></select></label>
+    <label>Presupuesto <input type="text" inputmode="numeric" id="amt" value="2.000"></label>
+    <p id="err"></p>
+    <p>Total<br><span id="tot"></span></p>
+    <button id="bnext">Siguiente</button>
+  </section>
+  <section id="b2" hidden>
+    <div id="pay-ok">
+      <p>Revisar promoción</p>
+      <p>Método de pago</p><p>Visa •••• 4242</p>
+      <p>Duración: <span id="dur2"></span></p>
+      <p>Total: <span id="tot2"></span></p>
+      <button id="bpay">Promocionar ahora</button>
+    </div>
+    <div id="pay-card" hidden>
+      <p>Agregar método de pago</p>
+      <label>Número de tarjeta <input autocomplete="cc-number" id="cc"></label>
+      <label>Fecha de vencimiento <input autocomplete="cc-exp"></label>
+      <button>Guardar</button>
+    </div>
+  </section>
+  <section id="b3" hidden><p>Tu promoción está en revisión</p></section>
+</div>
+<script>
+(() => {
+  const S = window.BOOST_SCENARIO || "ok";
+  const $ = (id) => document.getElementById(id);
+  const sym = S === "usd" ? "US$" : "₡";
+  const fmt = (n) => sym + String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  const days = () => Number($("dur").value.match(/\d+/)[0]);
+  const amount = () => Number($("amt").value.replace(/\D/g, "")) || 0;
+  const total = () => ($("rt").getAttribute("aria-checked") === "true" ? amount() : amount() * days());
+  const MIN = S === "min" ? 1000 : 0;
+  function recalc() {
+    const t = Math.max(total(), MIN);
+    $("err").textContent = MIN && total() < MIN ? "El presupuesto mínimo es " + fmt(MIN) : "";
+    $("tot").textContent = fmt(t);
+    $("tot2").textContent = fmt(t);
+    $("dur2").textContent = $("dur").value;
+  }
+  for (const r of [$("rd"), $("rt")]) r.onclick = () => {
+    $("rd").setAttribute("aria-checked", String(r.id === "rd"));
+    $("rt").setAttribute("aria-checked", String(r.id === "rt"));
+    recalc();
+  };
+  $("dur").onchange = recalc;
+  $("amt").oninput = recalc;
+  $("bopen").onclick = () => { $("bd").hidden = false; recalc(); };
+  $("bnext").onclick = () => {
+    $("b1").hidden = true; $("b2").hidden = false;
+    if (S === "card") { $("pay-ok").hidden = true; $("pay-card").hidden = false; }
+  };
+  $("bpay").onclick = async () => {
+    $("bpay").disabled = true;
+    await fetch("/__boost/" + window.ITEM_ID + "?total=" + total(), { method: "POST" });
+    $("b2").hidden = true; $("b3").hidden = false;
+  };
+})();
+</script>

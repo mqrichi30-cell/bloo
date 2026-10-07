@@ -5,7 +5,8 @@
 // No publica nada — no existe API de Meta para Marketplace en CR. Al final
 // deja la cola del robot coherente con los estados (lib/marketplace/tasks.ts:
 // encola publicar/quitar y cancela lo que ya no aplica). Lo que
-// hace es: crear la publicación (y encolar sus 3 imágenes IA) cuando un lente
+// hace es: crear la publicación (y encolar su hero IA; desde 2026-10-06 solo hero,
+// ver VARIANTES_ACTIVAS en status.ts) cuando un lente
 // tiene stock y no tiene publicación; pasarla a "lista para publicar" cuando
 // el hero está generado; y avisar "agotado, marcá vendido" cuando una
 // publicada se queda sin stock. Idempotente: correrlo dos veces seguidas no
@@ -16,7 +17,7 @@ import { writeAudit } from "@/lib/audit";
 import {
   CANAL_MARKETPLACE,
   IMAGE_ESTADOS_ACTIVOS,
-  IMAGE_VARIANTS,
+  VARIANTES_ACTIVAS,
   isListingStatus,
   siguienteStatus,
   type ImageEstado,
@@ -24,6 +25,7 @@ import {
 } from "./status";
 import { contextoDe, elegirSourceUrl, type Transicion } from "./listing";
 import { reconciliarTareas, type ReconciliacionTareas } from "./tasks";
+import { dispararImagegen, type DisparoImagegen } from "./dispatch";
 
 export interface MarketplaceSyncSummary {
   ranAt: string;
@@ -41,6 +43,8 @@ export interface MarketplaceSyncSummary {
   errores: { modelId: string; error: string }[];
   /** Ajuste de la cola del robot (null si falló: queda en `errores`). */
   tareas: ReconciliacionTareas | null;
+  /** Disparo inmediato del worker de fotos si se encoló algún hero (null = no hizo falta). */
+  imagegenDisparo: DisparoImagegen | null;
 }
 
 export async function runMarketplaceSync(opts: {
@@ -61,6 +65,7 @@ export async function runMarketplaceSync(opts: {
     stockNegativo: [],
     errores: [],
     tareas: null,
+    imagegenDisparo: null,
   };
 
   // Lentes vendibles + cualquier modelo que YA tenga publicación (aunque se
@@ -111,7 +116,7 @@ export async function runMarketplaceSync(opts: {
         }
         // Solo las variantes que no tengan ya una imagen viva (si alguna vez
         // se generaron sin publicación, no se paga dos veces).
-        const faltantes = IMAGE_VARIANTS.filter(
+        const faltantes = VARIANTES_ACTIVAS.filter(
           (v) => !m.generatedImages.some((i) => i.variant === v && IMAGE_ESTADOS_ACTIVOS.includes(i.estado as ImageEstado))
         );
         nuevos.push({
@@ -150,7 +155,7 @@ export async function runMarketplaceSync(opts: {
     }
   }
 
-  // Altas en bloque (3 queries en vez de 3 por modelo: la función de Netlify
+  // Altas en bloque (3 queries en vez de N por modelo: la función de Netlify
   // tiene timeout corto y el primer sync crea ~66 publicaciones).
   if (nuevos.length > 0) {
     try {
@@ -181,6 +186,9 @@ export async function runMarketplaceSync(opts: {
       summary.errores.push({ modelId: "(alta en bloque)", error: e instanceof Error ? e.message : String(e) });
     }
   }
+
+  // Hero nuevo encolado → el worker arranca ya (no espera el cron de 6 h).
+  if (summary.imagenesEncoladas > 0) summary.imagegenDisparo = await dispararImagegen(`sync:${opts.origen}`);
 
   // Después de TODAS las transiciones: la cola se decide sobre el estado ya
   // actualizado de cada publicación.

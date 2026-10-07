@@ -23,7 +23,7 @@ export function assertAllowedImageUrl(raw, hosts = IMAGE_HOSTS) {
 }
 
 /**
- * Descarga hasta 10 imágenes a un directorio temporal.
+ * Descarga TODAS las imágenes (máx. 10) en orden a un directorio temporal: foto-01, foto-02, ...
  * @param {string[]} urls
  * @param {{hosts?: Set<string>, fetchImpl?: typeof fetch}} [opts]
  * @returns {Promise<{dir: string, files: string[], cleanup: () => Promise<void>}>}
@@ -33,7 +33,8 @@ export async function downloadImages(urls, opts = {}) {
   const f = opts.fetchImpl || fetch;
   if (!Array.isArray(urls) || urls.length === 0) throw new Error("La tarea no trae imágenes");
   // Validar TODAS antes de descargar nada.
-  const parsed = urls.slice(0, 10).map((u) => assertAllowedImageUrl(u, hosts));
+  if (urls.length > 10) throw new Error(`La tarea trae ${urls.length} imágenes; Marketplace admite 10`);
+  const parsed = urls.map((u) => assertAllowedImageUrl(u, hosts));
   const dir = await mkdtemp(path.join(tmpdir(), "bloo-robot-"));
   const cleanup = () => rm(dir, { recursive: true, force: true });
   try {

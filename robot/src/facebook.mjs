@@ -1,6 +1,6 @@
 // @ts-check
 // Flujos de Facebook Marketplace (UI es-CR). Clicks y teclado reales; selectores accesibles.
-import { assertNoCheckpoint } from "./checkpoint.mjs";
+import { assertNoCheckpoint, NeedsHumanError } from "./checkpoint.mjs";
 import { pause, typingDelay, log, safeUrl } from "./util.mjs";
 
 export const FB_BASE = "https://www.facebook.com";
@@ -13,7 +13,7 @@ const NAV_TIMEOUT = 45_000;
  */
 
 /** Primer locator visible de una lista de candidatos. @param {Locator[]} candidates @param {number} [timeout] */
-async function firstVisible(candidates, timeout = 15_000) {
+export async function firstVisible(candidates, timeout = 15_000) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
     for (const c of candidates) {
@@ -26,7 +26,7 @@ async function firstVisible(candidates, timeout = 15_000) {
 }
 
 /** @param {Page} page @param {string} url */
-async function go(page, url) {
+export async function go(page, url) {
   await page.goto(url, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT });
   await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => {});
   await pause(1500, 3000);
@@ -34,7 +34,7 @@ async function go(page, url) {
 }
 
 /** Limpia el campo y escribe como humano. @param {Page} page @param {Locator} field @param {string} text */
-async function typeInto(page, field, text) {
+export async function typeInto(page, field, text) {
   await field.click();
   await pause(300, 800);
   await page.keyboard.press("ControlOrMeta+a");
@@ -219,7 +219,7 @@ async function openCombo(page, name) {
 }
 
 /** Opciones visibles de un desplegable abierto. @param {Page} page */
-function optionLocators(page) {
+export function optionLocators(page) {
   return page.locator(
     '[role="option"], [role="listbox"] [role="button"], [role="menuitem"], [role="menuitemradio"], [role="radio"], [role="dialog"] [role="button"]'
   );
@@ -292,6 +292,50 @@ async function ensureNoPromote(page) {
   if (await isOn()) throw new Error('No pude desmarcar "Promocionar tras publicar"');
 }
 
+/** Lee el contador "N/10" de fotos del formulario. null si no se ve. @param {string} text */
+export function photoCount(text) {
+  const m =
+    String(text || "").match(/(?:Fotos?|Photos?)[^\d\n]{0,20}(\d{1,2})\s*\/\s*10\b/i) ||
+    String(text || "").match(/\b(\d{1,2})\s*\/\s*10\s*[·•\-–]?\s*(?:Agregar|A[nñ]adir|Add|fotos|photos)/i);
+  return m ? Number(m[1]) : null;
+}
+
+/**
+ * Sube las fotos en orden. Si el input no admite varios archivos, las sube de a una (mismo orden).
+ * Si Facebook muestra el contador N/10 y no llega a files.length, falla (nunca publica con fotos de menos).
+ * @param {Page} page @param {string[]} files
+ */
+async function uploadPhotos(page, files) {
+  if (!Array.isArray(files) || files.length === 0) throw new Error("No hay fotos para subir");
+  if (files.length > 10) throw new Error(`Marketplace admite 10 fotos; la tarea trae ${files.length}`);
+  const sel = 'input[type="file"][accept*="image"]';
+  const input = page.locator(sel).first();
+  await input.waitFor({ state: "attached", timeout: 20_000 });
+  const multiple = await input.evaluate((el) => /** @type {HTMLInputElement} */ (el).multiple).catch(() => false);
+  if (multiple || files.length === 1) {
+    await input.setInputFiles(files);
+  } else {
+    for (const f of files) {
+      const inp = page.locator(sel).first();
+      await inp.waitFor({ state: "attached", timeout: 20_000 });
+      await inp.setInputFiles(f);
+      await pause(1500, 3000);
+    }
+  }
+  await pause(2000, 4000);
+  const deadline = Date.now() + 20_000;
+  let seen = null;
+  while (Date.now() < deadline) {
+    seen = photoCount(await page.evaluate(() => document.body?.innerText || "").catch(() => ""));
+    if (seen === null || seen >= files.length) break;
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  if (seen !== null && seen !== files.length) {
+    throw new Error(`Facebook muestra ${seen}/10 fotos; esperaba ${files.length}`);
+  }
+  log(`fotos subidas: ${files.length}${seen === null ? " (sin contador visible)" : " (contador verificado)"}`);
+}
+
 /**
  * Publica una tarea. Devuelve la URL de la publicación (o null si no se pudo ubicar).
  * @param {Page} page
@@ -314,12 +358,8 @@ export async function publicar(page, task, files, opts = {}) {
 
   await go(page, `${base}/marketplace/create/item`);
 
-  // Fotos
-  const fileInput = page.locator('input[type="file"][accept*="image"]').first();
-  await fileInput.waitFor({ state: "attached", timeout: 20_000 });
-  await fileInput.setInputFiles(files);
-  log(`fotos subidas: ${files.length}`);
-  await pause(2000, 4000);
+  // Fotos: TODAS, en el orden del payload (la primera es la portada).
+  await uploadPhotos(page, files);
 
   // Título / Precio
   const title = await firstVisible(fieldByName(page, /^T[ií]tulo/i));
@@ -407,7 +447,7 @@ const SOLD_DONE_RE = /Marcar como disponible|Marcado como (agotado|vendido)|^\s*
  * @param {Page} page
  * @param {import('./api.mjs').Task} task
  * @param {FlowOpts} [opts]
- * @returns {Promise<{method: 'vendido'|'eliminado'|'ya_estaba'|'dry-run'}>}
+ * @returns {Promise<{method: 'vendido'|'eliminado'|'ya_estaba'|'dry-run', url: string}>}
  */
 export async function quitar(page, task, opts = {}) {
   const base = opts.base || FB_BASE;
@@ -427,7 +467,7 @@ export async function quitar(page, task, opts = {}) {
     if (!shown) throw new Error(`La publicación ${safeUrl(url)} no muestra el título exacto "${title}"; no la toco`);
   }
 
-  if (await firstVisible([page.getByRole("button", { name: /Marcar como disponible/i })], 2500)) return { method: "ya_estaba" };
+  if (await firstVisible([page.getByRole("button", { name: /Marcar como disponible/i })], 2500)) return { method: "ya_estaba", url };
 
   const mark = await firstVisible(
     [page.getByRole("button", { name: /Marcar como (agotado|vendido)/i }), page.getByText(/^Marcar como (agotado|vendido)$/i)],
@@ -436,7 +476,7 @@ export async function quitar(page, task, opts = {}) {
   if (mark) {
     if (opts.dryRun) {
       log('dry-run: encontré "Marcar como agotado/vendido", NO se hizo clic');
-      return { method: "dry-run" };
+      return { method: "dry-run", url };
     }
     await mark.click();
     await pause(1500, 3000);
@@ -455,7 +495,7 @@ export async function quitar(page, task, opts = {}) {
     await assertNoCheckpoint(page);
     const ok = await firstVisible([page.getByRole("button", { name: /Marcar como disponible/i }), page.getByText(SOLD_DONE_RE)], 15_000);
     if (!ok) throw new Error("Hice clic en marcar como agotado pero no pude confirmar el cambio");
-    return { method: "vendido" };
+    return { method: "vendido", url };
   }
 
   // Fallback: eliminar
@@ -470,7 +510,7 @@ export async function quitar(page, task, opts = {}) {
   if (!del) throw new Error('No encontré la opción "Eliminar"');
   if (opts.dryRun) {
     log('dry-run: encontré "Eliminar", NO se hizo clic');
-    return { method: "dry-run" };
+    return { method: "dry-run", url };
   }
   await del.click();
   await pause();
@@ -479,5 +519,63 @@ export async function quitar(page, task, opts = {}) {
   await confirm.click();
   await pause(2000, 4000);
   await assertNoCheckpoint(page);
-  return { method: "eliminado" };
+  return { method: "eliminado", url };
+}
+
+/** id numérico de una URL de publicación. @param {string|null|undefined} url */
+const itemId = (url) => (String(url || "").match(/\/marketplace\/item\/(\d+)/) || [])[1];
+
+/**
+ * Reemplaza en UNA corrida: quita la publicación vieja (título EXACTO = task.oldTitle) y publica la nueva.
+ * - Vieja no encontrada / ambigua / título distinto → NeedsHumanError y NO publica (evita duplicados).
+ * - Otro fallo al quitar → Error y NO publica.
+ * - Si la vieja ya estaba vendida (corrida anterior cortada) y ya existe una con el título nuevo,
+ *   no vuelve a publicar: devuelve esa URL (reused).
+ * @param {Page} page @param {import('./api.mjs').Task} task @param {string[]} files @param {FlowOpts} [opts]
+ * @returns {Promise<{externalUrl: string|null, category: string, submitted: boolean, oldMethod: string, oldUrl: string, reused?: boolean}>}
+ */
+export async function reemplazar(page, task, files, opts = {}) {
+  const base = opts.base || FB_BASE;
+  const oldTitle = cleanTitle(task.oldTitle || "");
+  if (!oldTitle) throw new Error("La tarea reemplazar no trae oldTitle");
+  if (!task.kit?.title) throw new Error("La tarea no trae título");
+  if (!Array.isArray(files) || files.length === 0) throw new Error("No hay fotos para subir");
+
+  const human = (/** @type {string} */ m) => new NeedsHumanError(`reemplazar: ${m}; no publico la nueva para no duplicar`);
+  let oldUrl = task.externalUrl ? normalizeItemUrl(task.externalUrl, base) : null;
+  if (!oldUrl) {
+    try {
+      oldUrl = await findListingUrl(page, oldTitle, base, { attempts: 2 });
+    } catch (e) {
+      if (e?.name === "CheckpointError") throw e;
+      throw human(e instanceof Error ? e.message : String(e));
+    }
+    if (!oldUrl) throw human(`no encontré la publicación vieja con el título exacto "${oldTitle}"`);
+  }
+  log(`reemplazar: vieja ${safeUrl(oldUrl)}`);
+
+  let q;
+  try {
+    q = await quitar(page, { ...task, action: "quitar", externalUrl: oldUrl, kit: { ...task.kit, title: oldTitle } }, opts);
+  } catch (e) {
+    if (e?.name === "CheckpointError") throw e;
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/no muestra el título exacto|No encontré ninguna publicación|publicaciones con el título exacto/.test(msg)) throw human(msg);
+    throw new Error(`reemplazar: no pude quitar la vieja (${msg}); no publiqué la nueva`);
+  }
+  log(`reemplazar: vieja quitada (${q.method})`);
+
+  if (q.method === "ya_estaba" && cleanTitle(task.kit.title) !== oldTitle) {
+    const prev = await findListingUrl(page, task.kit.title, base, { attempts: 1, exclude: [itemId(oldUrl) || ""] }).catch((e) => {
+      if (e?.name === "CheckpointError") throw e;
+      throw human(`ya hay varias con el título nuevo (${e instanceof Error ? e.message : e})`);
+    });
+    if (prev) {
+      log("reemplazar: la vieja ya estaba vendida y la nueva ya existe (corrida anterior); no republico");
+      return { externalUrl: prev, category: "(ya publicada)", submitted: true, oldMethod: q.method, oldUrl, reused: true };
+    }
+  }
+
+  const r = await publicar(page, task, files, opts);
+  return { ...r, oldMethod: q.method, oldUrl };
 }

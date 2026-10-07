@@ -1,4 +1,6 @@
-"""Text-to-image provider chain for BACKGROUND PLATES only (never the product).
+"""Image providers. Product scenes: OpenAIEdit (paid GPT Image, ONE call per image) and CloudflareEdit
+(free FLUX.2 edit, the fallback); both are gated locally and the real product pixels are restored.
+The chain below is the text-to-image provider chain for BACKGROUND PLATES only (never the product).
 
 Order and quotas follow docs/IMAGE_PROVIDERS.md (verified 2026-09-23):
   1. Together  black-forest-labs/FLUX.1-schnell-Free   free/unlimited, pace 2-3 s
@@ -312,6 +314,276 @@ class CloudflareEdit(Provider):
             self.state["day"], self.state["day_count"] = day, 0
         self.state["day_count"] = self.state.get("day_count", 0) + 1
         return _decode_image(base64.b64decode(r.json()["result"]["image"])), model
+
+
+# ------------------------------------------------------------------ OpenAI GPT Image (PAID)
+# Verified 2026-10-06 against the official docs:
+#   API reference  https://developers.openai.com/api/reference/resources/images/methods/edit
+#   Guide          https://developers.openai.com/api/docs/guides/image-generation
+#   Pricing        https://developers.openai.com/api/docs/pricing
+#   Error codes    https://developers.openai.com/api/docs/guides/error-codes
+# - POST https://api.openai.com/v1/images/edits, multipart; the input goes in the `image[]` field
+#   (png/webp/jpg, < 50 MB; up to 16 images), `prompt` up to 32,000 chars.
+# - gpt-image-2 takes any WIDTHxHEIGHT with both edges multiples of 16, ratio <= 3:1,
+#   655,360..8,294,400 px, edge <= 3840 -> 1024x1280 is an exact 4:5.
+# - Default model gpt-image-2.5-sunburst: "Choose Sunburst for workflows where editing precision matters
+#   most" (guide). Same multipart edit, same custom-size rules (1024x1280 ok), quality
+#   low|medium|high|xhigh|max|auto (gpt-image-2: up to high). input_fidelity is documented only for
+#   gpt-image-1/1.5 (gpt-image-2: "omit") -> omitted for every 2.x model. Response: data[0].b64_json (GPT Image
+#   models never return a URL); `usage` may be present.
+# - input_fidelity: "For gpt-image-2, omit this parameter" (every image input is processed at high
+#   fidelity automatically). Only gpt-image-1 / 1.5 accept input_fidelity=high.
+# - Billing/quota errors are 429 with error.code credit_balance_exhausted / *_spend_limit_exceeded /
+#   organization_usage_limit_exceeded (type insufficient_quota); "retrying won't restore access".
+#   500/503 are server-side: retry after a brief wait.
+OPENAI_URL = "https://api.openai.com/v1/images/edits"
+OPENAI_LEDGER = "openai_images"  # global state key (the budget belongs to the API key, not the host)
+OPENAI_TIMEOUT = (15, 300)  # connect, read: a high-quality render takes ~1-2 min
+OPENAI_JOBS_KEEP = 30 * 86400
+# Output-token formula of the official calculator (GptImageTokenCalculator on the guide page):
+# per-quality base o; s = o / (long/short); tokens = ceil(o * round(s) * (2e6 + w*h) / 4e6).
+# Checked: gpt-image-2 high 1024x1024 -> 7,024 tok = $0.211 and 1024x1536 -> 5,488 tok = $0.165,
+# exactly the guide's table at $30 / 1M image output tokens.
+_OUT_BASE = {"gpt-image-2": {"low": 16, "medium": 48, "high": 96},
+             "gpt-image-2.5": {"low": 16, "medium": 24, "high": 48, "xhigh": 64, "max": 96}}
+OPENAI_PRICE = {"image_in": 8.0, "text_in": 5.0, "image_out": 30.0}  # USD per 1M tokens (standard tier)
+# gpt-image-2 input-image tokens are not published (always high fidelity). Estimate with the
+# gpt-image-1 high-fidelity rule for a square input (65 + 129 + 4,160 extra) rounded up.
+OPENAI_IN_IMAGE_TOKENS_EST = 4400
+OPENAI_IN_TEXT_TOKENS_EST = 300
+_BILLING_CODES = ("insufficient_quota", "credit_balance_exhausted", "spend_limit", "usage_limit",
+                  "billing_hard_limit", "billing")
+
+
+def _round_half_even(x: float) -> int:
+    lo = int(x // 1)
+    return lo + lo % 2 if x - lo == 0.5 else round(x)
+
+
+def gpt_output_tokens(model: str, w: int, h: int, quality: str) -> int:
+    fam = "gpt-image-2.5" if model.startswith("gpt-image-2.5") else "gpt-image-2"
+    o = _OUT_BASE[fam].get(quality, _OUT_BASE[fam]["high"])
+    u = _round_half_even(o / (max(w, h) / min(w, h)))
+    d = (o * u) if w >= h else (u * o)
+    return -(-(d * (2_000_000 + w * h)) // 4_000_000)
+
+
+def gpt_cost_usd(model: str, w: int, h: int, quality: str, usage: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Estimated cost of one edit call. With the response's `usage` the token counts are real."""
+    out_tok = gpt_output_tokens(model, w, h, quality)
+    in_img, in_txt, src = OPENAI_IN_IMAGE_TOKENS_EST, OPENAI_IN_TEXT_TOKENS_EST, "estimate"
+    if isinstance(usage, dict):
+        det = usage.get("input_tokens_details") or {}
+        try:
+            in_img = int(det.get("image_tokens", in_img))
+            in_txt = int(det.get("text_tokens", in_txt))
+            out_tok = int(usage.get("output_tokens", out_tok))
+            src = "usage"
+        except (TypeError, ValueError):
+            pass
+    usd = (in_img * OPENAI_PRICE["image_in"] + in_txt * OPENAI_PRICE["text_in"]
+           + out_tok * OPENAI_PRICE["image_out"]) / 1e6
+    # xhigh/max: the calculator gives output tokens but the guide's price table does not list them,
+    # so without `usage` the figure is flagged as not officially priced
+    published = quality in ("low", "medium", "high")
+    return {"usd": round(usd, 4), "quality": quality, "size": f"{w}x{h}", "model": model,
+            "tokens": {"in_image": in_img, "in_text": in_txt, "out": out_tok}, "source": src,
+            "price": "usage" if src == "usage" else ("estimate" if published else "unknown (estimate only)")}
+
+
+def openai_ledger(state: dict[str, Any]) -> dict[str, Any]:
+    """Spend ledger in the shared provider state: images/USD today and this month, plus the image
+    ids that already got their ONE paid call (so a re-queued or crashed job never pays twice)."""
+    led = state.setdefault(OPENAI_LEDGER, {})
+    now = datetime.now(timezone.utc)
+    day, month = now.strftime("%Y-%m-%d"), now.strftime("%Y-%m")
+    if led.get("day") != day:
+        led.update(day=day, images=0, usd=0.0)
+    if led.get("month") != month:
+        led.update(month=month, month_images=0, month_usd=0.0)
+    jobs = led.setdefault("jobs", {})
+    cutoff = now_ts() - OPENAI_JOBS_KEEP
+    for k in [k for k, v in jobs.items() if float(v) < cutoff]:
+        del jobs[k]
+    return led
+
+
+def openai_daily_cap() -> int:
+    try:
+        return max(0, int(env("OPENAI_MAX_IMAGES_PER_DAY", "30") or 30))
+    except ValueError:
+        return 30
+
+
+QUALITY_FALLBACK = ("max", "xhigh", "high")  # a 400 on `quality` steps down (never billed)
+
+
+class OpenAIRejected(ProviderError):
+    """OpenAI refused the request (4xx such as moderation_blocked / invalid size): not billed."""
+
+
+class AlreadyPaid(ProviderError):
+    """This image id already had its one paid GPT call (30-day memory in the ledger)."""
+
+
+class OpenAIEdit(Provider):
+    """GPT Image edit (PAID; default gpt-image-2.5-sunburst, quality max). ONE call per image: never retried for quality reasons.
+
+    No client-side pacing (owner's call 2026-10-06: paid route, no waiting); only OpenAI's own 429 +
+    Retry-After is honoured. The spend cap OPENAI_MAX_IMAGES_PER_DAY (default 30) is booked BEFORE
+    each call in the shared state, so a crash mid-call still counts against it.
+    """
+    name = "gptimage"
+    min_interval = 0.0
+
+    def __init__(self, state: dict[str, Any]) -> None:
+        super().__init__(state)
+        self.root = state
+        self.model = env("OPENAI_IMAGE_MODEL", "gpt-image-2.5-sunburst") or "gpt-image-2.5-sunburst"
+        self.quality = (env("OPENAI_IMAGE_QUALITY", "max") or "max").lower()
+        w, _, h = (env("OPENAI_IMAGE_SIZE", "1024x1280") or "1024x1280").lower().partition("x")
+        self.size = (int(w), int(h))
+        if self.size[0] % 16 or self.size[1] % 16:
+            raise ValueError("OPENAI_IMAGE_SIZE edges must be multiples of 16")
+
+    @property
+    def label(self) -> str:
+        return f"gptimage:{self.model}"
+
+    def configured(self) -> bool:
+        return bool(env("OPENAI_API_KEY")) and env("OPENAI_DISABLED") != "1"
+
+    def spent_today(self) -> int:
+        return int(openai_ledger(self.root).get("images", 0))
+
+    def available(self) -> bool:
+        return super().available() and self.spent_today() < openai_daily_cap()
+
+    def already_paid(self, image_id: str | None) -> bool:
+        return bool(image_id) and str(image_id) in openai_ledger(self.root)["jobs"]
+
+    def estimate(self, usage: dict[str, Any] | None = None, quality: str | None = None) -> dict[str, Any]:
+        return gpt_cost_usd(self.model, self.size[0], self.size[1], quality or self.quality, usage)
+
+    @staticmethod
+    def _quality_rejected(r: requests.Response) -> bool:
+        """400 validation error about the `quality` value (e.g. 'max' not accepted for edits)."""
+        if r.status_code != 400:
+            return False
+        try:
+            err = r.json().get("error") or {}
+        except ValueError:
+            return "quality" in (r.text or "").lower()
+        return (str(err.get("param") or "").lower() == "quality"
+                or "quality" in str(err.get("message") or "").lower())
+
+    def _book(self, usd: float, sign: int, image_id: str | None) -> None:
+        led = openai_ledger(self.root)
+        for k, v in (("images", sign), ("month_images", sign)):
+            led[k] = max(0, int(led.get(k, 0)) + v)
+        for k in ("usd", "month_usd"):
+            led[k] = round(max(0.0, float(led.get(k, 0.0)) + sign * usd), 4)
+        if image_id:
+            if sign > 0:
+                led["jobs"][str(image_id)] = now_ts()
+            else:
+                led["jobs"].pop(str(image_id), None)
+
+    def _error_code(self, r: requests.Response) -> str:
+        try:
+            err = r.json().get("error") or {}
+            return f"{err.get('type') or ''}:{err.get('code') or ''}".lower()
+        except ValueError:
+            return ""
+
+    def edit(self, prompt: str, ref: Image.Image, image_id: str | None = None) -> tuple[Image.Image, dict[str, Any]]:
+        """The single paid call. Returns (image, call info with the cost estimate).
+
+        Retries ONCE only when nothing can have been billed: connection failure before the request
+        was sent, or HTTP 5xx. A read timeout after sending is counted as spent and not retried.
+        """
+        if self.already_paid(image_id):
+            raise AlreadyPaid(f"image {image_id} already had its paid GPT call")
+        cap = openai_daily_cap()
+        if self.spent_today() >= cap:
+            raise QuotaExhausted(next_utc_midnight(), f"OPENAI_MAX_IMAGES_PER_DAY {cap} reached")
+        buf = io.BytesIO()
+        ref.convert("RGB").save(buf, "PNG")
+        data = {"model": self.model, "prompt": prompt, "quality": self.quality, "n": "1",
+                "size": f"{self.size[0]}x{self.size[1]}", "output_format": "png"}
+        if self.model.startswith(("gpt-image-1.5", "gpt-image-1")) and not self.model.endswith("mini"):
+            data["input_fidelity"] = "high"  # gpt-image-2*: must be omitted (always high)
+        headers = {"Authorization": "Bearer " + (env("OPENAI_API_KEY") or "")}
+        quality = self.quality
+        downgrades: list[str] = []
+        transient_retry = True
+        attempt = 0
+        while True:
+            attempt += 1
+            body_fields = {**data, "quality": quality}
+            est = self.estimate(quality=quality)
+            self._book(est["usd"], +1, image_id)
+            self.state["last_call"] = now_ts()
+            t0 = time.monotonic()
+            try:
+                r = requests.post(OPENAI_URL, headers=headers, data=body_fields, timeout=OPENAI_TIMEOUT,
+                                  files=[("image[]", ("product.png", buf.getvalue(), "image/png"))])
+            except requests.ReadTimeout as e:  # sent: OpenAI may have rendered and billed it
+                raise ProviderError("gptimage read timeout after send (counted as spent, not retried)") from e
+            except (requests.ConnectionError, requests.Timeout) as e:  # never reached OpenAI
+                self._book(est["usd"], -1, image_id)
+                if transient_retry:
+                    transient_retry = False
+                    log.warning("gptimage connection failed (%s), one retry", type(e).__name__)
+                    continue
+                raise ProviderError(f"gptimage connection failed twice: {type(e).__name__}") from e
+            if r.status_code >= 500:
+                self._book(est["usd"], -1, image_id)
+                if transient_retry:
+                    transient_retry = False
+                    log.warning("gptimage HTTP %s, one retry", r.status_code)
+                    time.sleep(min(parse_retry_after(r.headers.get("Retry-After")) or 2.0, 20.0))
+                    continue
+                raise ProviderError(f"gptimage HTTP {r.status_code} twice")
+            if r.status_code >= 400:
+                self._book(est["usd"], -1, image_id)  # 4xx = validation/refusal: not billed
+                code = self._error_code(r)
+                if self._quality_rejected(r) and quality in QUALITY_FALLBACK[:-1]:
+                    nxt = QUALITY_FALLBACK[QUALITY_FALLBACK.index(quality) + 1]
+                    log.warning("gptimage rejected quality=%s (%s); trying %s (not a paid attempt)",
+                                quality, code, nxt)
+                    downgrades.append(quality)
+                    quality = nxt
+                    continue
+                if r.status_code == 429 or any(b in code for b in _BILLING_CODES):
+                    if any(b in code for b in _BILLING_CODES):  # credits/spend limit: a human must act
+                        raise QuotaExhausted(next_utc_midnight(), f"gptimage billing/quota ({code})")
+                    ra = parse_retry_after(r.headers.get("Retry-After"))
+                    raise QuotaExhausted(now_ts() + (ra if ra is not None else 60.0), f"gptimage rate limit ({code})")
+                if r.status_code in (401, 403):
+                    raise QuotaExhausted(now_ts() + 6 * 3600, f"gptimage auth HTTP {r.status_code} ({code})")
+                raise OpenAIRejected(f"gptimage HTTP {r.status_code} ({code})")
+            try:
+                body = r.json()
+                img = _decode_image(base64.b64decode(body["data"][0]["b64_json"]))
+            except (ValueError, KeyError, IndexError, TypeError, OSError) as e:
+                raise ProviderError(f"gptimage: unreadable response ({type(e).__name__})") from e
+            call = self.estimate(body.get("usage"), quality)
+            if call["usd"] != est["usd"]:  # replace the booked estimate with the usage-based one
+                led = openai_ledger(self.root)
+                for k in ("usd", "month_usd"):
+                    led[k] = round(float(led[k]) - est["usd"] + call["usd"], 4)
+            call.update(attempt=attempt, seconds=round(time.monotonic() - t0, 1),
+                        day_images=self.spent_today(), day_cap=cap, quality_rejected=downgrades)
+            if downgrades:  # rest of this run: start at the level that worked
+                self.quality = quality
+            day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            if self.state.get("day") != day:
+                self.state["day"], self.state["day_count"] = day, 0
+            self.state["day_count"] = self.state.get("day_count", 0) + 1
+            log.info("gptimage %s %s %s -> $%.3f (%s), %d/%d today", self.model, quality,
+                     call["size"], call["usd"], call["price"], call["day_images"], cap)
+            return img, call
 
 
 _HMS = re.compile(r"(\d+):(\d{1,2}):(\d{2})")

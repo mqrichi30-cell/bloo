@@ -15,8 +15,23 @@ export const LISTING_STATUSES = [
 ] as const;
 export type ListingStatus = (typeof LISTING_STATUSES)[number];
 
+/** Variantes válidas en la base (CHECK de GeneratedImage): incluye las
+ *  históricas. Para decidir qué se encola/muestra usar VARIANTES_ACTIVAS. */
 export const IMAGE_VARIANTS = ["hero", "flatlay", "detail"] as const;
 export type ImageVariant = (typeof IMAGE_VARIANTS)[number];
+
+/**
+ * Decisión del dueño 2026-10-06: cada lente usa SOLO el hero. flatlay/detail
+ * no se encolan más (sync), no se regeneran (panel), el worker no las reclama
+ * (imagegen-queue.ts) y no van a Facebook. Las filas viejas quedan como
+ * historia (append-only); las pendientes se cierran como 'rechazada' con
+ * scripts/2026-10-06-cancelar-flatlay-detail.ts.
+ */
+export const VARIANTES_ACTIVAS = ["hero"] as const satisfies readonly ImageVariant[];
+
+export function esVarianteActiva(v: string): boolean {
+  return (VARIANTES_ACTIVAS as readonly string[]).includes(v);
+}
 
 export const IMAGE_ESTADOS = ["pendiente", "generando", "lista", "rechazada", "error"] as const;
 export type ImageEstado = (typeof IMAGE_ESTADOS)[number];
@@ -31,19 +46,28 @@ export const IMAGE_LEASE_MINUTES = 30;
 export const IMAGE_DEFAULT_RETRY_SECONDS = 3600;
 
 /**
- * Estilo de foto aprobado por el dueño (2026-09-25): SOLO la edición FLUX.2
- * del producto real que pasó el control de fidelidad. El worker marca esas
- * filas con provider "cfedit:<modelo>" (imagegen/imagegen/run.py, rama edit).
+ * Hero aceptado para publicar, por provider (lo marca el worker Python):
+ *  · "gptimage:<modelo>" — OpenAI gpt-image (calidad alta), desde 2026-10-06.
+ *  · "cfedit:<modelo>"   — edición FLUX.2 del producto real que pasó el
+ *    control de fidelidad (estilo aprobado 2026-09-25). Sigue valiendo: es el
+ *    respaldo del worker cuando GPT falla un chequeo duro, y es lo que tienen
+ *    hoy las publicaciones vivas.
  * Todo lo demás es estilo viejo y NO se publica: composite sobre fondo
  * ("hfspace", "pollinations"…), incluso los fallbacks generados después del
  * requeue (traen qa.edit con intentos fallidos, así que ni qa.edit ni la
  * fecha de creación sirven de criterio; el provider sí).
+ * Si se agrega un prefijo acá, ESPERANDO_FOTO en tasks.ts lo toma solo.
  */
-export const PROVIDER_ESTILO_NUEVO = "cfedit:";
+export const PROVIDERS_HERO_ACEPTADOS = ["gptimage:", "cfedit:"] as const;
 
 export function esEstiloNuevo(provider: string | null | undefined): boolean {
-  return typeof provider === "string" && provider.startsWith(PROVIDER_ESTILO_NUEVO);
+  return typeof provider === "string" && PROVIDERS_HERO_ACEPTADOS.some((p) => provider.startsWith(p));
 }
+
+/** Resultado de la pauta que reporta el robot (MarketplaceTask.boostStatus;
+ *  CHECK en la migración 20261006000000). */
+export const BOOST_STATUSES = ["pagado", "simulado", "omitido", "fallido"] as const;
+export type BoostStatus = (typeof BOOST_STATUSES)[number];
 
 export function isListingStatus(s: string): s is ListingStatus {
   return (LISTING_STATUSES as readonly string[]).includes(s);

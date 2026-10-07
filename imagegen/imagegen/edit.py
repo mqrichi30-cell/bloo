@@ -63,6 +63,39 @@ EDIT_PROMPTS: dict[str, str] = {
 }
 
 
+# Fixed accessory photo (python -m imagegen.estuche): same scene as the hero, for the glasses case.
+ESTUCHE_PROMPT = (
+    "Edit image 0: replace only the plain white background. Keep the glasses case exactly as it is in "
+    "image 0: same position in the frame, same size, same viewing angle, same shape, same navy colour, "
+    "same leather grain texture and the same curved flap. Do not redesign, restyle, open, rotate or "
+    "duplicate it, and do not add any glasses or sunglasses. New scene: the glasses case rests on a "
+    "natural beige linen tablecloth with a fine visible weave, the table surface continuing under and "
+    "around it in matching perspective, with a soft realistic contact shadow directly beneath it. "
+    "Softly out of focus in the background: a folded navy linen napkin and one monstera leaf. "
+    "Warm soft natural window daylight, gentle shallow depth of field, crisp focus on the case, "
+    "photoreal editorial product photograph, quiet coastal old-money mood. No text, no logos, no hands.")
+
+# GPT route (one paid call, never corrected): which failures disqualify the paid render.
+# HARD = the owner's list (two pairs / reflection, hands, text / watermark, a different product)
+# plus anything that makes the output unusable or uncertifiable. SOFT = scene heuristics that do
+# not touch the product; they are logged as warnings and the render ships.
+GPT_SOFT_LOCAL = ("no linen surface",)
+GPT_SOFT_REVIEW = ("floating", "scene_incomplete")
+
+
+def gpt_hard_defects(local_reason: str = "", review_defects: list[str] | None = None) -> list[str]:
+    """Defects that reject a GPT render (empty list = accept). Unknown defects count as hard."""
+    hard: list[str] = []
+    if local_reason and not local_reason.startswith(GPT_SOFT_LOCAL):
+        hard.append(local_reason)
+    for d in review_defects or []:
+        d = str(d)
+        if d in GPT_SOFT_REVIEW or d.startswith("model: "):  # "model: ..." only annotates the others
+            continue
+        hard.append(d)
+    return hard
+
+
 # fed back into the next attempt's prompt when an attempt fails (local checks or the AI reviewer)
 _FIXES: list[tuple[tuple[str, ...], str]] = [
     (("reflection", "duplicate", "mirror", "second pair", "glasses_count", "ghost"),
@@ -136,22 +169,23 @@ class Reference:
     box: tuple[int, int, int, int]  # where the full-res cutout sits inside the REF canvas (l, t, r, b)
 
 
-def build_reference(cut: Image.Image, margin: float = 0.10) -> Reference:
+def build_reference(cut: Image.Image, margin: float = 0.10, side: int = REF_SIDE) -> Reference:
     """Clean input for the edit model: the segmented product (no hand, no supplier text, no second
-    pair) centred on white. Feeding the raw Nihao photo would let the model keep labels/hands."""
+    pair) centred on white. Feeding the raw Nihao photo would let the model keep labels/hands.
+    `side` = canvas size (511 for Workers AI; GPT Image takes a larger one, same geometry)."""
     arr = np.asarray(cut.convert("RGBA")).copy()
     arr[..., 3] = main_product(arr[..., 3])
     rgba = Image.fromarray(arr, "RGBA")
     bbox = rgba.getchannel("A").point(lambda v: 255 if v > 8 else 0).getbbox() or (0, 0, *rgba.size)
     rgba = rgba.crop(bbox)
-    side = round(max(rgba.size) * (1 + 2 * margin))
-    scale = REF_SIDE / side
+    span = round(max(rgba.size) * (1 + 2 * margin))
+    scale = side / span
     nw, nh = max(1, round(rgba.width * scale)), max(1, round(rgba.height * scale))
-    l, t = (REF_SIDE - nw) // 2, (REF_SIDE - nh) // 2
+    l, t = (side - nw) // 2, (side - nh) // 2
     small = rgba.resize((nw, nh), Image.LANCZOS)
-    canvas = Image.new("RGB", (REF_SIDE, REF_SIDE), (255, 255, 255))
+    canvas = Image.new("RGB", (side, side), (255, 255, 255))
     canvas.paste(small, (l, t), small)
-    alpha = np.zeros((REF_SIDE, REF_SIDE), np.float32)
+    alpha = np.zeros((side, side), np.float32)
     alpha[t:t + nh, l:l + nw] = np.asarray(small.getchannel("A"), np.float32) / 255
     return Reference(canvas, alpha, rgba, (l, t, l + nw, t + nh))
 

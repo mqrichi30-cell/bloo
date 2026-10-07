@@ -8,12 +8,14 @@ import { verifyCsrf } from "@/lib/csrf";
 import { writeAudit } from "@/lib/audit";
 import { idSchema } from "@/lib/validation";
 import { listingPatchSchema } from "@/lib/marketplace/validation";
-import { kitHash, renderKit } from "@/lib/marketplace/kit";
+import { kitHash, kitInputDe, renderKit } from "@/lib/marketplace/kit";
 import { contextoDe, elegirSourceUrl, reevaluarListing } from "@/lib/marketplace/listing";
 import { isAllowedSourceUrl } from "@/lib/marketplace/hosts";
 import { cancelarTareasAbiertas } from "@/lib/marketplace/tasks";
+import { dispararImagegen } from "@/lib/marketplace/dispatch";
 import {
   IMAGE_ESTADOS_ACTIVOS,
+  esVarianteActiva,
   isListingStatus,
   statusAlReanudar,
   type ListingStatus,
@@ -102,12 +104,7 @@ export async function PATCH(request: Request, { params }: { params: { id: string
           throw new ConflictoError(`No se puede marcar publicado desde "${actual}".`);
         }
         if (ctx.available <= 0) throw new ConflictoError("No hay unidades disponibles de este modelo.");
-        const kitActual = renderKit({
-          nombre: m.nombre,
-          color: m.color,
-          material: m.material,
-          precioVentaCent: m.precioVentaCent,
-        });
+        const kitActual = renderKit(kitInputDe(m));
         const hash = kitHash(kitActual);
         await mover({
           status: "publicado",
@@ -135,7 +132,7 @@ export async function PATCH(request: Request, { params }: { params: { id: string
             "si no, la próxima sincronización lo vuelve a poner como listo para publicar.";
         }
         // Cris ya lo quitó de Marketplace a mano: sobra la tarea 'quitar'.
-        const canceladas = await cancelarTareasAbiertas(prisma, listing.id, ["quitar"], "Cris lo marcó vendido a mano");
+        const canceladas = await cancelarTareasAbiertas(prisma, listing.id, ["quitar", "reemplazar"], "Cris lo marcó vendido a mano");
         detalle = { de: actual, a: "vendido", available: ctx.available, tareasCanceladas: canceladas };
         break;
       }
@@ -149,7 +146,7 @@ export async function PATCH(request: Request, { params }: { params: { id: string
         const canceladas = await cancelarTareasAbiertas(
           prisma,
           listing.id,
-          ["publicar", "quitar"],
+          ["publicar", "quitar", "reemplazar"],
           "Cris pausó la publicación"
         );
         detalle = { de: actual, a: "pausado", tareasCanceladas: canceladas };
@@ -174,6 +171,11 @@ export async function PATCH(request: Request, { params }: { params: { id: string
         });
         if (!img) throw new ConflictoError("Imagen no encontrada en esta publicación.", 404);
         if (img.estado === "rechazada") throw new ConflictoError("Esa imagen ya fue reemplazada.");
+        // Solo hero desde 2026-10-06: regenerar una flatlay/detail vieja
+        // volvería a gastar IA en una foto que ya no se publica.
+        if (!esVarianteActiva(img.variant)) {
+          throw new ConflictoError(`La variante '${img.variant}' ya no se usa (solo hero).`);
+        }
 
         const sourceUrl =
           elegirSourceUrl(m.nihaoVariants, m.fotoUrl) ?? (isAllowedSourceUrl(img.sourceUrl) ? img.sourceUrl : null);
@@ -194,7 +196,9 @@ export async function PATCH(request: Request, { params }: { params: { id: string
           await reevaluarListing(tx, m.id);
           return creada;
         });
-        detalle = { imagenReemplazada: img.id, imagenNueva: nueva.id, variant: img.variant };
+        // El worker arranca ya, no espera el cron (dispatch.ts, con dedupe).
+        const disparo = await dispararImagegen("panel:regenerar_imagen");
+        detalle = { imagenReemplazada: img.id, imagenNueva: nueva.id, variant: img.variant, imagegenDisparo: disparo };
         break;
       }
     }

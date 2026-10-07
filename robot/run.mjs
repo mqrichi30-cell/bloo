@@ -3,21 +3,27 @@
 //   node run.mjs              → corrida real
 //   node run.mjs --dry-run    → llena todo pero NO hace el clic final (Publicar / confirmar)
 //   (--no-submit es sinónimo de --dry-run)
+// Acciones: publicar | quitar | reemplazar (quita la vieja por oldTitle exacto y publica la nueva).
+// Pauta (task.boost) tras publicar/reemplazar: ver src/boost.mjs (dry = simula, on = paga ₡500 verificado).
 // Env: BLOO_URL, CRON_SECRET, FB_STORAGE_STATE_B64. Nada de esto se imprime.
+// ROBOT_BUDGET_MS: presupuesto de tiempo de la corrida (default 9,5 min; el job tiene timeout 12).
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createApi, ApiNotDeployedError } from "./src/api.mjs";
 import { launch } from "./src/browser.mjs";
-import { CheckpointError } from "./src/checkpoint.mjs";
+import { CheckpointError, NeedsHumanError } from "./src/checkpoint.mjs";
 import { downloadImages } from "./src/images.mjs";
-import { publicar, quitar } from "./src/facebook.mjs";
+import { runTask } from "./src/runner.mjs";
 import { log, safeUrl, shortError } from "./src/util.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ARTIFACTS = path.join(HERE, "artifacts");
 const argv = new Set(process.argv.slice(2));
 const dryRun = argv.has("--dry-run") || argv.has("--no-submit") || process.env.ROBOT_DRY_RUN === "true";
+const BUDGET_MS = Number(process.env.ROBOT_BUDGET_MS) > 0 ? Number(process.env.ROBOT_BUDGET_MS) : 570_000;
+const DEADLINE = Date.now() + BUDGET_MS;
+const ACTIONS = new Set(["publicar", "quitar", "reemplazar"]);
 
 function loadStorageState() {
   const b64 = process.env.FB_STORAGE_STATE_B64 || "";
@@ -33,7 +39,10 @@ function loadStorageState() {
   }
 }
 
-/** Screenshot de evidencia (imagen: no lleva cookies ni storageState). @param {import('playwright').Page|null} page @param {string} taskId @param {string} error */
+/**
+ * Screenshot de evidencia (imagen: no lleva cookies ni storageState). Tapa números de tarjeta visibles (•••• 1234).
+ * @param {import('playwright').Page|null} page @param {string} taskId @param {string} error
+ */
 async function saveEvidence(page, taskId, error) {
   try {
     await mkdir(ARTIFACTS, { recursive: true });
@@ -41,7 +50,10 @@ async function saveEvidence(page, taskId, error) {
     const base = path.join(ARTIFACTS, `${stamp}-${taskId.replace(/[^\w-]/g, "")}`);
     const url = page ? safeUrl(page.url()) : "(sin página)";
     await writeFile(`${base}.txt`, `task: ${taskId}\nurl: ${url}\nerror: ${error}\n`);
-    if (page) await page.screenshot({ path: `${base}.png`, fullPage: false, timeout: 15_000 });
+    if (page) {
+      const mask = [page.getByText(/(?:[•*·]\s?){2,}\d{4}|terminad[ao] en \d{4}|ending in \d{4}/i)];
+      await page.screenshot({ path: `${base}.png`, fullPage: false, timeout: 15_000, mask });
+    }
   } catch (e) {
     log(`no pude guardar evidencia: ${shortError(e)}`);
   }
@@ -72,7 +84,10 @@ async function main() {
     log(/** @type {any} */ (claim)?.ocupado ? "hay una tarea tomada por otra corrida (lock activo); salgo" : "sin tareas pendientes");
     return 0;
   }
-  log(`tarea ${task.id}: ${task.action}${dryRun ? " (dry-run)" : ""}`);
+  log(
+    `tarea ${task.id}: ${task.action}${dryRun ? " (dry-run)" : ""}; fotos: ${Array.isArray(task.images) ? task.images.length : 0}` +
+      `; pauta: ${task.boost ? task.boost.mode : "no"}`
+  );
 
   /** @param {import('./src/api.mjs').TaskResult} result */
   const report = async (result) => {
@@ -91,35 +106,32 @@ async function main() {
   /** @type {Awaited<ReturnType<typeof downloadImages>>|null} */
   let imgs = null;
   try {
-    const storageState = loadStorageState();
-    if (task.action === "publicar") imgs = await downloadImages(task.images);
-    session = await launch({ headless: true, storageState });
-    page = await session.context.newPage();
-
-    if (task.action === "publicar") {
-      const r = await publicar(page, task, /** @type {NonNullable<typeof imgs>} */ (imgs).files, { dryRun });
-      if (!r.submitted) {
-        // dry-run: no se reporta; captura de la pantalla "Publicar" como evidencia
-        await saveEvidence(page, task.id, `dry-run OK: pantalla Publicar alcanzada (categoría: ${r.category})`);
-        return 0;
-      }
-      await report(
-        r.externalUrl
-          ? { status: "hecha", externalUrl: r.externalUrl }
-          : { status: "hecha", error: "Publicada, pero no ubiqué la URL en Tus publicaciones" }
-      );
-    } else if (task.action === "quitar") {
-      const r = await quitar(page, task, { dryRun });
-      log(`quitar: ${r.method}`);
-      if (r.method !== "dry-run") await report({ status: "hecha" });
-    } else {
+    if (!ACTIONS.has(task.action)) {
       await report({ status: "fallida", error: `Acción desconocida: ${String(task.action)}` });
       return 1;
     }
+    const storageState = loadStorageState();
+    // Fotos ANTES de abrir Facebook: si falta alguna, no se toca nada (ni siquiera se quita la vieja).
+    if (task.action === "publicar" || task.action === "reemplazar") {
+      imgs = await downloadImages(task.images);
+      if (imgs.files.length !== task.images.length) throw new Error(`Bajé ${imgs.files.length} de ${task.images.length} fotos`);
+    }
+    session = await launch({ headless: true, storageState });
+    page = await session.context.newPage();
+
+    const result = await runTask(page, task, {
+      files: imgs?.files,
+      dryRun,
+      deadline: DEADLINE,
+      onEvidence: (p, note) => saveEvidence(p, task.id, note),
+    });
+    if (result) await report(result);
     return 0;
   } catch (e) {
     const msg = shortError(e);
-    if (e instanceof CheckpointError) {
+    if (e instanceof NeedsHumanError) {
+      // CheckpointError también es NeedsHumanError. Captura solo si NO es login/checkpoint (no hay nada útil que mostrar).
+      if (!(e instanceof CheckpointError)) await saveEvidence(page, task.id, msg);
       log(`necesita humano: ${msg}`);
       await report({ status: "necesita_humano", error: msg }).catch((err) => log(`no pude reportar: ${shortError(err)}`));
       return 0;

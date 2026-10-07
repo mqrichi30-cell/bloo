@@ -4,7 +4,8 @@
 //
 // `due` = vale la pena llamar a /next ahora: ninguna tarea 'hecha' en los
 // últimos 110 min (ritmo del dueño, ver ROBOT_PACING_MINUTES) Y hay al menos
-// una pendiente lista (no esperando foto) Y el robot no está pausado.
+// una pendiente lista (publicar/quitar/reemplazar que no espera foto de lente
+// ni la foto fija del estuche) Y el robot no está pausado.
 // `nextDueAt` = cuándo vence el ritmo (null si ya venció).
 import { NextResponse } from "next/server";
 import { requireCronSecret } from "@/lib/marketplace/cron-auth";

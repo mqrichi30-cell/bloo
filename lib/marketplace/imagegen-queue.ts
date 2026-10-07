@@ -11,7 +11,7 @@
 // de la sesión).
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { IMAGE_LEASE_MINUTES, IMAGE_MAX_ATTEMPTS } from "./status";
+import { IMAGE_LEASE_MINUTES, IMAGE_MAX_ATTEMPTS, VARIANTES_ACTIVAS } from "./status";
 
 const SCHEMA = Prisma.raw(`"bloo"`);
 const AHORA = Prisma.raw(`timezone('utc', now())`);
@@ -22,9 +22,12 @@ const LEASE = Prisma.raw(`interval '${IMAGE_LEASE_MINUTES} minutes'`);
 // Qué se puede reclamar: pendiente/error vencidos con intentos de sobra, o
 // 'generando' con el lease vencido (el worker murió a mitad). Y solo de
 // publicaciones que todavía piden imágenes: no se gasta IA en pausadas ni
-// vendidas.
+// vendidas. Solo variantes activas (hoy solo 'hero', decisión 2026-10-06): una
+// flatlay/detail que haya quedado pendiente no se genera aunque exista.
+const VARIANTES = Prisma.join(VARIANTES_ACTIVAS.map((v) => Prisma.sql`${v}`));
 const RECLAMABLE = Prisma.sql`
   g."attempts" < ${IMAGE_MAX_ATTEMPTS}
+  AND g."variant" IN (${VARIANTES})
   AND (
     (g."estado" IN ('pendiente', 'error') AND (g."nextAttemptAt" IS NULL OR g."nextAttemptAt" <= ${AHORA}))
     OR (g."estado" = 'generando' AND g."lockedUntil" < ${AHORA})

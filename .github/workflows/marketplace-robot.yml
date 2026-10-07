@@ -1,5 +1,6 @@
-# Robot de Facebook Marketplace (robot/): publica y quita publicaciones de bloo en la cuenta
+# Robot de Facebook Marketplace (robot/): publica, quita y reemplaza publicaciones de bloo en la cuenta
 # PERSONAL del dueño (aceptó el riesgo de ToS/bloqueo de Meta). UNA tarea por corrida.
+# Pauta (boost ₡500) tras publicar/reemplazar solo si el panel la manda; el modo dry/on lo decide el servidor.
 # Presupuesto: 12 corridas/día; una corrida sin tareas sale en el primer paso (~1 min facturado).
 # Secrets: CRON_SECRET, FB_STORAGE_STATE_B64 (se crea con robot/capture-session.mjs). Nunca se imprimen.
 name: marketplace-robot
@@ -30,6 +31,8 @@ concurrency:
 jobs:
   robot:
     runs-on: ubuntu-latest
+    # reemplazar (quitar + publicar) + pauta debe caber aquí; run.mjs se da 9,5 min (ROBOT_BUDGET_MS)
+    # y omite la pauta si quedan < 2,5 min.
     timeout-minutes: 12
     env:
       BLOO_URL: https://bloo-panel.netlify.app
@@ -106,9 +109,10 @@ jobs:
           ROBOT_DRY_RUN: ${{ inputs.dry_run == true && 'true' || 'false' }}
         run: node run.mjs
 
-      # Solo capturas PNG + un .txt con URL sin query y el error. Nunca storageState ni HTML.
-      - name: Upload evidence (fallo o dry-run)
-        if: (failure() || inputs.dry_run == true) && steps.pending.outputs.run == 'true'
+      # Solo capturas PNG (números de tarjeta tapados) + un .txt con URL sin query y el error/nota.
+      # Nunca storageState ni HTML. always(): la pauta dry o fallida deja captura aunque el job termine bien.
+      - name: Upload evidence (fallo, dry-run o pauta)
+        if: always() && steps.pending.outputs.run == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: robot-evidence-${{ github.run_id }}

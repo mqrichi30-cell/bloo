@@ -1,7 +1,9 @@
 // @ts-check
-/** Pausa aleatoria (ritmo humano). */
+/** Pausa aleatoria (ritmo humano). ROBOT_PAUSE_SCALE (solo tests, 0–1) la acorta; en producción vale 1. */
 export function pause(minMs = 500, maxMs = 2000) {
-  const ms = Math.round(minMs + Math.random() * (maxMs - minMs));
+  const raw = Number(process.env.ROBOT_PAUSE_SCALE);
+  const scale = Number.isFinite(raw) && raw > 0 && raw <= 1 ? raw : 1;
+  const ms = Math.round((minMs + Math.random() * (maxMs - minMs)) * scale);
   return new Promise((r) => setTimeout(r, ms));
 }
 

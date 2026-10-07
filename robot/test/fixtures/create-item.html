@@ -5,7 +5,7 @@
 <body>
 <!-- Stub local que imita el formulario real (docs/MARKETPLACE_FORM.md). NO es Facebook. -->
 <main id="step1">
-  <div>0/10 · Agregar fotos <input type="file" multiple accept="image/*,image/heif,image/heic" id="fotos"></div>
+  <div>Fotos · <span id="cnt">0</span>/10 · Puedes agregar hasta 10 fotos. <input type="file" multiple accept="image/*,image/heif,image/heic" id="fotos"></div>
   <label>Título <input type="text" id="titulo"></label>
   <label>Precio <input type="text" id="precio"></label>
 
@@ -36,6 +36,13 @@
 <script>
   const $ = (id) => document.getElementById(id);
   const state = {};
+  // Como Facebook: cada "change" AGREGA las fotos (en orden) y vacía el input.
+  const fotos = [];
+  $('fotos').onchange = () => {
+    for (const f of $('fotos').files) fotos.push(f.name);
+    $('fotos').value = '';
+    $('cnt').textContent = String(fotos.length);
+  };
   function combo(btn, list, key) {
     btn.onclick = () => { list.hidden = !list.hidden; };
     list.querySelectorAll('[role=option]').forEach((o) => o.onclick = () => {
@@ -51,7 +58,7 @@
   };
   $('pub').onclick = async () => {
     const body = { titulo: $('titulo').value, precio: $('precio').value, descripcion: $('desc').value, marca: $('marca').value,
-      fotos: $('fotos').files.length, promo: $('promo').checked, ...state };
+      fotos, promo: $('promo').checked, ...state };
     await fetch('/__submit', { method: 'POST', body: JSON.stringify(body) });
     location.href = '/marketplace/you/selling/';
   };

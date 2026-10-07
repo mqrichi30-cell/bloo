@@ -5,8 +5,13 @@ export class ApiNotDeployedError extends Error {}
 
 /**
  * @typedef {{title: string, description: string, priceColones: number, category?: string, condition?: string, location?: string}} Kit
- * @typedef {{id: string, action: 'publicar'|'quitar', listingId?: string, externalUrl?: string|null, kit: Kit, images: string[]}} Task
- * @typedef {{status: 'hecha'|'fallida'|'necesita_humano', externalUrl?: string, error?: string}} TaskResult
+ * @typedef {{mode: 'dry'|'on', amountCrc: number}} Boost
+ * @typedef {{status: 'pagado'|'simulado'|'omitido'|'fallido', amountCrc: number, detail?: string}} BoostResult
+ * @typedef {{id: string, action: 'publicar'|'quitar'|'reemplazar', listingId?: string, externalUrl?: string|null,
+ *   oldTitle?: string|null, kit: Kit, images: string[], boost?: Boost|null}} Task
+ *   images: publicar/reemplazar = [foto IA del lente, foto fija del estuche] en ese orden (se suben TODAS, en orden).
+ *   oldTitle: solo reemplazar = título EXACTO de la publicación vieja. externalUrl en reemplazar = URL de la vieja.
+ * @typedef {{status: 'hecha'|'fallida'|'necesita_humano', externalUrl?: string, error?: string, boost?: BoostResult}} TaskResult
  */
 
 /**

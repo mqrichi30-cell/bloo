@@ -1,8 +1,17 @@
 // @ts-check
 // Detecta cuando Facebook pide intervención humana. Nunca se intenta resolver: se pausa y se avisa.
 
-/** Error que significa "necesita_humano". */
-export class CheckpointError extends Error {
+/** Error que significa "necesita_humano" sin ser un checkpoint (p. ej. reemplazar sin encontrar la vieja). */
+export class NeedsHumanError extends Error {
+  /** @param {string} reason */
+  constructor(reason) {
+    super(reason);
+    this.name = "NeedsHumanError";
+  }
+}
+
+/** Facebook pide intervención humana (login, checkpoint, 2FA, captcha...). También es "necesita_humano". */
+export class CheckpointError extends NeedsHumanError {
   /** @param {string} reason */
   constructor(reason) {
     super(reason);

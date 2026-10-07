@@ -7,11 +7,14 @@
 // Respuestas:
 //   { paused: true, motivo }                      — Cris tiene que reanudar
 //   { task: null, pendientes: 0 }                 — cola vacía
-//   { task: null, pendientes, esperandoFotos }    — solo quedan 'publicar' con
-//                                                   el hero regenerándose
+//   { task: null, pendientes, esperandoFotos, estucheFaltante? }
+//                                                 — solo quedan publicar/reemplazar
+//                                                   esperando hero o la foto fija
+//                                                   del estuche
 //   { task: null, ocupado: true, pendientes }     — otra corrida tiene lease vigente
 //   { task: null, espera: true, nextDueAt }       — ritmo: hubo una 'hecha' hace < 110 min
-//   { task: { id, action, listingId, externalUrl, kit, images } }
+//   { task: { id, action, listingId, externalUrl, oldTitle, kit, images, boost } }
+//     action: publicar | quitar | reemplazar. Contrato en tasks.ts#RobotTaskPayload.
 import { NextResponse } from "next/server";
 import { requireCronSecret } from "@/lib/marketplace/cron-auth";
 import { runMarketplaceSync } from "@/lib/marketplace/sync";
@@ -21,6 +24,7 @@ import {
   contarEsperandoFotos,
   contarPendientes,
   estadoRobot,
+  estucheDisponible,
   reclamarSiguiente,
 } from "@/lib/marketplace/tasks";
 
@@ -44,11 +48,13 @@ export async function POST(request: Request) {
       return NextResponse.json({ task: null, espera: true, nextDueAt: nextDueAt.toISOString() });
     }
     if (!tarea) {
-      const [pendientes, esperandoFotos] = await Promise.all([contarPendientes(), contarEsperandoFotos()]);
+      const estucheOk = await estucheDisponible();
+      const [pendientes, esperandoFotos] = await Promise.all([contarPendientes(), contarEsperandoFotos(estucheOk)]);
       return NextResponse.json({
         task: null,
         pendientes,
         ...(esperandoFotos > 0 ? { esperandoFotos } : {}),
+        ...(!estucheOk ? { estucheFaltante: true } : {}),
         ...(ocupado ? { ocupado: true } : {}),
       });
     }
@@ -58,7 +64,13 @@ export async function POST(request: Request) {
       accion: "robot.claim",
       entidad: "MarketplaceTask",
       entidadId: task.id,
-      detalle: { action: task.action, listingId: task.listingId, imagenes: task.images.length },
+      detalle: {
+        action: task.action,
+        listingId: task.listingId,
+        imagenes: task.images.length,
+        oldTitle: task.oldTitle,
+        boost: task.boost,
+      },
     });
     return NextResponse.json({ task });
   } catch (error) {

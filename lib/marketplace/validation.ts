@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { idSchema } from "@/lib/validation";
 import { isAllowedPublicUrl } from "./hosts";
+import { BOOST_STATUSES } from "./status";
 
 /**
  * Link de la publicación que pega Cris. Solo https de Facebook: se renderiza
@@ -86,6 +87,16 @@ export const robotResultSchema = z
     // Prueba sin Facebook: solo libera el lease (vuelve a pendiente, sin
     // intento). Si viene, se ignora `status`.
     dryRun: z.boolean().optional(),
+    // Pauta tras publicar/reemplazar. Va aparte del status: un boost
+    // 'fallido' NO hace fallar la publicación. amountCrc en colones enteros
+    // (en la base se guarda en céntimos). Tope generoso: el server ofrece 500.
+    boost: z
+      .object({
+        status: z.enum(BOOST_STATUSES),
+        amountCrc: z.number().int().min(0).max(100_000),
+        detail: z.string().trim().max(500).nullish(),
+      })
+      .nullish(),
   })
   .refine((b) => b.dryRun === true || b.status !== undefined, {
     message: "status es obligatorio (salvo dryRun:true)",

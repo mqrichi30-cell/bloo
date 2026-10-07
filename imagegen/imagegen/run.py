@@ -1,5 +1,7 @@
 """Entry point: `python -m imagegen.run [--once] [--max-jobs N --max-minutes M] | --next-wait |
---dry-run --source <file|url> [--plate file] [--cutout file.png]`.
+--dry-run --source <file|url> [--plate file] [--cutout file.png] [--edit-image f | --edit | --gpt] [--review]`.
+
+Hero jobs: one paid GPT Image call (gpt_scene), then cfedit (free) if the render has a hard defect.
 
 Exit codes (scheduler friendly): 0 = pass finished normally, including "nothing pending" and
 "all providers exhausted, retry later"; 2 = configuration missing; 1 = unexpected crash.
@@ -23,10 +25,11 @@ from .bloo_api import BlooApi, Job
 from .composite import OUTPUT_SIZES, composite, to_jpeg
 from .cutout import cut_out, load_source, segment_alpha
 from .edit import (EDIT_PROMPTS, GEN_SIZE, build_reference, correction_prompt, fidelity_gate,
-                   product_fits_square, restore_product, to_outputs)
+                   gpt_hard_defects, product_fits_square, restore_product, to_outputs)
 from .platecheck import PlateRejected
 from .plates import PlatePool, local_plate, validate_plate
-from .providers import CloudflareEdit, ProviderChain, ProviderError, QuotaExhausted
+from .providers import (CF_NEURON_BUDGET, REVIEW_NEURON_RESERVE, CloudflareEdit, OpenAIEdit, ProviderChain,
+                        ProviderError, QuotaExhausted, cf_ledger, openai_daily_cap)
 from .qa import run_qa
 from .reflection import duplicate_check, remove_reflection
 from .review import VisionReviewer
@@ -164,8 +167,96 @@ def edit_scene(cut: Image.Image, variant: str, editor: CloudflareEdit | None,
     return None, meta
 
 
+GPT_REF_SIDE = 1024  # reference canvas sent to GPT Image (same geometry as the 511 gate reference)
+GPT_VISION_HARD = {"hand_visible", "product_differs", "text_or_logo"}
+
+
+def review_available(reviewer: VisionReviewer | None, state: dict[str, Any] | None) -> bool:
+    """The AI review runs on the Cloudflare neuron budget: GPT is only paid for when its render can
+    be reviewed afterwards (an unreviewed image never becomes 'lista')."""
+    if reviewer is None or not reviewer.configured():
+        return False
+    if state is None:
+        return True
+    return float(cf_ledger(state)["used"]) + REVIEW_NEURON_RESERVE <= CF_NEURON_BUDGET
+
+
+def gpt_usable(gpt: OpenAIEdit | None, variant: str, image_id: str | None, reviewer: VisionReviewer | None,
+               state: dict[str, Any] | None) -> str:
+    """'' when the paid GPT route may run for this job, else why it is skipped."""
+    if gpt is None or not gpt.configured():
+        return "not configured"
+    if variant != "hero":
+        return "hero only"
+    if not gpt.available():
+        return "daily cap reached or provider benched"
+    if gpt.already_paid(image_id):
+        return "already had its paid call"
+    if not review_available(reviewer, state):
+        return "ai review unavailable"
+    return ""
+
+
+def gpt_scene(cut: Image.Image, gpt: OpenAIEdit, reviewer: VisionReviewer,
+              image_id: str | None = None) -> tuple[dict[str, Image.Image] | None, dict[str, Any]]:
+    """Paid route: ONE GPT Image call (EDIT_PROMPTS['hero'] as is), then the free checks of the edit
+    path (duplicate/reflection, fidelity gate, crop, real-pixel restore, AI review). GPT is never
+    called again: a hard defect returns (None, meta) and the caller falls back to cfedit."""
+    meta: dict[str, Any] = {"provider": gpt.label, "model": gpt.model}
+    ref = build_reference(cut)
+    big = build_reference(cut, side=GPT_REF_SIDE)
+    try:
+        img, call = gpt.edit(EDIT_PROMPTS["hero"], big.image, image_id)
+    except QuotaExhausted as e:
+        gpt.mark_exhausted(e.reset_at, str(e))
+        meta.update(rejected=True, why=f"quota: {str(e)[:160]}")
+        return None, meta
+    except (ProviderError, requests.RequestException, ValueError, OSError) as e:
+        meta.update(rejected=True, why=f"api: {str(e)[:200]}")
+        log.warning("gptimage failed: %s", str(e)[:300])
+        return None, meta
+    meta["cost"] = call
+    alpha = segment_alpha(img)
+    dup_ok, dup_reason, dup_stats = duplicate_check(img, alpha)
+    meta["dup"] = dup_stats
+    if not dup_ok:
+        meta.update(rejected=True, hard=[dup_reason], why=dup_reason)
+        log.info("gptimage render REJECTED (%s); no paid retry", dup_reason)
+        return None, meta
+    rep = fidelity_gate(ref, img, alpha, RESTORE)
+    meta["gate"] = {k: v for k, v in rep.stats.items() if k not in ("wm", "hand")}
+    hard = gpt_hard_defects(rep.reason) if not rep.ok else []
+    if not hard and not product_fits_square(alpha, OUTPUT_SIZES["1x1"][1] / OUTPUT_SIZES["4x5"][1]):
+        hard = ["product too large for the 1:1 crop"]
+    if hard or rep.fit is None:
+        hard = hard or ["fidelity gate: no fit"]
+        meta.update(rejected=True, hard=hard, why=hard[0])
+        log.info("gptimage render REJECTED (hard: %s); no paid retry", hard)
+        return None, meta
+    warnings = [rep.reason] if rep.reason else []
+    final = restore_product(img, ref, rep.homography if rep.homography is not None else rep.fit, alpha) if RESTORE else img
+    outs = to_outputs(final, alpha, OUTPUT_SIZES)
+    try:
+        verdict = reviewer.review(ref.image, outs["1x1"], "hero")
+    except (QuotaExhausted, ProviderError) as e:  # cannot certify -> never 'lista' unreviewed
+        meta.update(rejected=True, hard=["ai review unavailable"], why=f"review: {str(e)[:160]}")
+        return None, meta
+    meta["aiReview"] = verdict
+    defects = [str(d) for d in verdict.get("defects") or []]
+    hard = gpt_hard_defects("", defects)
+    warnings += [d for d in defects if d not in hard and not d.startswith("model: ")]
+    if hard:
+        meta.update(rejected=True, hard=hard, why="ai review: " + ", ".join(hard))
+        log.info("gptimage render REJECTED by AI review (%s); no paid retry", hard)
+        return None, meta
+    meta.update(rejected=False, warnings=warnings, restored=RESTORE)
+    log.info("gptimage render ACCEPTED%s", f" (soft warnings: {warnings})" if warnings else "")
+    return outs, meta
+
+
 def process_job(job: Job, pool: PlatePool, storage: Storage,
-                editor: CloudflareEdit | None = None, reviewer: VisionReviewer | None = None) -> dict[str, Any]:
+                editor: CloudflareEdit | None = None, reviewer: VisionReviewer | None = None,
+                gpt: OpenAIEdit | None = None, state: dict[str, Any] | None = None) -> dict[str, Any]:
     variant = job.variant if job.variant in VARIANTS else "hero"
     src = load_source(job.source_url)
     cut, hand = cut_out(src)
@@ -173,11 +264,30 @@ def process_job(job: Job, pool: PlatePool, storage: Storage,
         return _err("source_has_hand", qa={"local": hand.as_dict()})
     cut, refl = clean_cutout(cut)
 
+    gmeta: dict[str, Any] | None = None
+    skip = gpt_usable(gpt, variant, job.image_id, reviewer, state)
+    if not skip and gpt is not None and reviewer is not None:
+        gouts, gmeta = gpt_scene(cut, gpt, reviewer, job.image_id)
+        if gouts is not None:
+            qa = run_qa(src, gouts["1x1"])  # optional Gemini QA; the AI review already passed
+            failed = set(qa.get("failed", [])) & GPT_VISION_HARD
+            if not failed:
+                qa.update(local=hand.as_dict(), gpt=gmeta, aiReview=gmeta.get("aiReview"), source=refl)
+                return _upload(job, variant, gouts["1x1"], gouts["4x5"], storage, qa, gpt.label)
+            gmeta.update(rejected=True, hard=sorted(failed), why="vision qa: " + ",".join(sorted(failed)))
+        log.info("gptimage rejected for %s (%s) -> free cfedit fallback", job.image_id, gmeta.get("why"))
+    elif gpt is not None and gpt.configured():
+        gmeta = {"skipped": skip}
+
     outs, emeta = edit_scene(cut, variant, editor, reviewer)
     emeta["source"] = refl
+    if gmeta is not None:
+        emeta["gpt"] = gmeta
     if outs is not None:
         qa = run_qa(src, outs["1x1"])  # optional Gemini QA (GEMINI_API_KEY); the AI review already passed
         qa.update(local=hand.as_dict(), edit=emeta, aiReview=emeta.get("aiReview"))
+        if gmeta is not None:
+            qa["gpt"] = gmeta
         if not set(qa.get("failed", [])) & {"hand_visible", "product_differs", "text_or_logo"}:
             return _upload(job, variant, outs["1x1"], outs["4x5"], storage, qa, f"cfedit:{emeta['model']}")
         emeta["vision_failed"] = qa.get("failed")
@@ -224,6 +334,8 @@ def _edit_failure(emeta: dict[str, Any], local: dict[str, Any]) -> dict[str, Any
     """Edit-only mode: never 'lista' without a gated FLUX.2 edit that the AI reviewer passed.
     Quota -> quota_wait (no attempt burned)."""
     qa: dict[str, Any] = {"local": local, "edit": emeta}
+    if emeta.get("gpt") is not None:
+        qa["gpt"] = emeta["gpt"]  # why the paid render was rejected / skipped
     if emeta.get("aiReview") is not None:
         qa["aiReview"] = emeta["aiReview"]
     if "quota_reset" in emeta:
@@ -275,9 +387,13 @@ def run_worker(max_jobs: int, max_minutes: float, once: bool = False) -> int:
     chain = ProviderChain(state)
     editor = CloudflareEdit(state)
     reviewer = VisionReviewer(state)
+    gpt = OpenAIEdit(state)
     pool = PlatePool(storage, chain)
     configured = [p.key for p in chain.providers if p.configured()]
     log.info("providers configured: %s", ", ".join(configured) or "none")
+    if gpt.configured():
+        log.info("gptimage %s quality=%s size=%dx%d: %d/%d paid images today", gpt.model, gpt.quality,
+                 gpt.size[0], gpt.size[1], gpt.spent_today(), openai_daily_cap())
 
     done = ok = 0
     exhausted_until: float | None = None
@@ -289,6 +405,8 @@ def run_worker(max_jobs: int, max_minutes: float, once: bool = False) -> int:
 
     def servable() -> list[str]:
         edit_ok = editor.available()
+        if not edit_ok and gpt.available() and review_available(reviewer, state):
+            return ["hero"]  # free budget spent: only the paid route (hero) can still serve
         if not composite_allowed():
             return list(VARIANTS) if edit_ok else []
         return [v for v in VARIANTS if edit_ok or pool.can_serve(v)]
@@ -328,7 +446,7 @@ def run_worker(max_jobs: int, max_minutes: float, once: bool = False) -> int:
                     continue
                 t0 = time.monotonic()
                 try:
-                    payload = process_job(job, pool, storage, editor, reviewer)
+                    payload = process_job(job, pool, storage, editor, reviewer, gpt, state)
                 except QuotaExhausted as e:
                     exhausted_until = e.reset_at
                     payload = _quota_wait(e.reset_at, str(e))
@@ -372,7 +490,7 @@ def next_wait() -> int:
 
 
 def run_dry_edit(stem: str, cut: Image.Image, variant: str, edit_image: str | None, online: bool,
-                 review: bool = False) -> list[Path]:
+                 review: bool = False, gpt: bool = False) -> list[Path]:
     """Edit path in dry-run. Offline with --edit-image (a render saved earlier: reflection fix, duplicate
     check, gate + restore); --edit calls Workers AI for real (~160 neurons); --review also runs the AI
     vision reviewer on the result (~11 neurons). Both need CF_ACCOUNT_ID/CF_API_TOKEN."""
@@ -383,6 +501,12 @@ def run_dry_edit(stem: str, cut: Image.Image, variant: str, edit_image: str | No
     written = [OUT_DIR / f"{stem}-edit-ref.png"]
     if edit_image:
         img = Image.open(edit_image).convert("RGB")
+    elif gpt:  # ONE paid GPT Image call (OPENAI_API_KEY); the raw render is kept for offline re-gating
+        g = OpenAIEdit({})
+        img, call = g.edit(EDIT_PROMPTS["hero"], build_reference(cut, side=GPT_REF_SIDE).image)
+        img.save(OUT_DIR / f"{stem}-gpt-raw.png")
+        written.append(OUT_DIR / f"{stem}-gpt-raw.png")
+        log.info("gpt render by %s: %s", g.label, call)
     else:
         state: dict[str, Any] = {}
         img, model = CloudflareEdit(state).edit(EDIT_PROMPTS[variant], ref.image, GEN_SIZE,
@@ -412,7 +536,8 @@ def run_dry_edit(stem: str, cut: Image.Image, variant: str, edit_image: str | No
 
 
 def run_dry(source: str, variants: list[str], plate: str | None, cutout: str | None = None,
-            edit_image: str | None = None, online_edit: bool = False, review: bool = False) -> int:
+            edit_image: str | None = None, online_edit: bool = False, review: bool = False,
+            gpt: bool = False) -> int:
     """Offline: cutout + plate gates + composite into out/ (network only to fetch a URL source)."""
     OUT_DIR.mkdir(exist_ok=True)
     stem = Path(source.split("?")[0]).stem or "source"
@@ -429,8 +554,8 @@ def run_dry(source: str, variants: list[str], plate: str | None, cutout: str | N
         written.append(OUT_DIR / f"{stem}-cutout.png")
         if hand.has_hand:
             log.warning("source_has_hand -> a real run would report estado=error, error=source_has_hand")
-    if edit_image or online_edit:
-        for p in run_dry_edit(stem, cut, variants[0], edit_image, online_edit, review):
+    if edit_image or online_edit or gpt:
+        for p in run_dry_edit(stem, cut, variants[0], edit_image, online_edit, review, gpt):
             print(p)
         return 0
     cut, _ = clean_cutout(cut)
@@ -467,6 +592,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--edit-image", help="dry-run: offline gate + restore on a saved FLUX.2 render")
     ap.add_argument("--edit", action="store_true",
                     help="dry-run: call Workers AI FLUX.2 for real (network, ~160 neurons) and gate it")
+    ap.add_argument("--gpt", action="store_true",
+                    help="dry-run: ONE paid GPT Image call (OPENAI_API_KEY; sunburst, quality max) + gates")
     ap.add_argument("--review", action="store_true",
                     help="dry-run edit: also run the AI vision reviewer (network, ~11 neurons)")
     ap.add_argument("--once", action="store_true",
@@ -483,7 +610,7 @@ def main(argv: list[str] | None = None) -> int:
         if not a.source:
             ap.error("--dry-run needs --source")
         return run_dry(a.source, [a.variant] if a.variant else list(VARIANTS), a.plate, a.cutout,
-                       a.edit_image, a.edit, a.review)
+                       a.edit_image, a.edit, a.review, a.gpt)
     try:
         return run_worker(a.max_jobs, a.max_minutes, once=a.once)
     except Exception:  # noqa: BLE001 - claimed jobs were already reported inside run_worker

@@ -2,6 +2,39 @@
 
 Verified 2026-09-23. Use for text-to-image background plates only; product is composited later.
 
+## 0. Product scene chain (hero) — updated 2026-10-06
+
+Owner decision (Cris): the best OpenAI image model, **one paid attempt per image**, never a paid
+correction or retry for quality. Order per job (`imagegen/run.py process_job`):
+
+1. **OpenAI GPT Image edit** (`gptimage:<model>`, default `gpt-image-2.5-sunburst` ("editing precision
+   matters most" per the guide), `OPENAI_IMAGE_QUALITY` default `max`; a 400 on `quality` steps down to
+   `xhigh`, then `high`, unbilled and not counted as the paid attempt; `input_fidelity` omitted; `1024x1280`
+   = exact 4:5, crops to 1080x1350 and 1080x1080). Hero only. Skipped when `OPENAI_API_KEY` is unset,
+   the daily cap `OPENAI_MAX_IMAGES_PER_DAY` (default 30) is reached, the image id already had its paid
+   call (30-day memory in `state/providers.json` -> `openai_images.jobs`), or the Cloudflare AI review
+   has no neurons left (an unreviewed render can never ship, so it is not paid for).
+   After the call, free checks: duplicate/reflection, fidelity gate (silhouette, colour, hand, text),
+   1:1 crop fit, real-pixel restore, AI vision review (Gemma on Workers AI), optional Gemini QA.
+   Hard defect (two pairs/reflection, hands, text/watermark, different product, unusable crop, review
+   unavailable) -> step 2, with `qa.gpt = {rejected, hard, why, cost}`. Soft (linen heuristic,
+   floating, scene incomplete) -> ships, listed in `qa.gpt.warnings`.
+   HTTP: one retry only for connection failures and 5xx (not billed); a read timeout after sending
+   counts as spent; 4xx -> step 2; 429 billing codes -> benched until 00:00 UTC; 429 rate limit ->
+   Retry-After. No client-side pacing.
+   Cost: `max`/`xhigh` are NOT on the official price table. The guide's calculator gives Sunburst max
+   at 1024x1280 = 6,119 output tokens x $30/1M = $0.184, plus ~4,400 input-image tokens x $8/1M
+   (unpublished, estimate) ~ $0.035 -> ~$0.22, flagged `price: "unknown (estimate only)"`. The real cost
+   comes from the response `usage` when present (`price: "usage"`). Logged per call in `qa.gpt.cost`,
+   summed in `openai_images.{usd,month_usd}`. Cap stays `OPENAI_MAX_IMAGES_PER_DAY=30`.
+   Docs: https://developers.openai.com/api/reference/resources/images/methods/edit ·
+   https://developers.openai.com/api/docs/guides/image-generation · https://developers.openai.com/api/docs/pricing
+2. **Cloudflare FLUX.2 [klein] edit** (`cfedit:<model>`), free 10k neurons/day, up to 3 free
+   attempts with corrections, same gates + AI review. Also the only route for flatlay/detail.
+3. Plate composite (sections below) only with `IMAGEGEN_ALLOW_COMPOSITE=1`.
+
+Fixed accessory photo: `python -m imagegen.estuche` (one GPT call ever) -> `bloo-marketing/fixed/estuche-estandar-{4x5,1x1}.jpg`.
+
 ## 1. Google Gemini API (image gen)
 
 - Models live: `gemini-2.5-flash-image` (aka "Nano Banana"), retiring 2026-10-02.

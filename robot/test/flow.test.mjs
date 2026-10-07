@@ -1,4 +1,5 @@
 // Prueba los flujos contra un stub local (NO toca Facebook).
+process.env.ROBOT_PAUSE_SCALE ??= "0.15"; // pausas humanas más cortas solo en tests
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
@@ -7,15 +8,20 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { launch } from "../src/browser.mjs";
-import { publicar, quitar } from "../src/facebook.mjs";
-import { CheckpointError } from "../src/checkpoint.mjs";
+import { publicar, quitar, reemplazar } from "../src/facebook.mjs";
+import { promocionar } from "../src/boost.mjs";
+import { runTask } from "../src/runner.mjs";
+import { CheckpointError, NeedsHumanError } from "../src/checkpoint.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const CREATE = readFileSync(path.join(HERE, "fixtures", "create-item.html"), "utf8");
+const BOOST = readFileSync(path.join(HERE, "fixtures", "boost-dialog.html"), "utf8");
 // Título publicado, recortado al tope de 60 caracteres (como en producción).
 const TITLE = "Lentes de sol bloo · Coro… · Verde Transparente · Gris Claro";
 const TITLE_Q = "Lentes de sol bloo · Corobicí · Leopardo · Seco";
 const MANUAL = "Lentes de sol Bloo"; // listados manuales del dueño: el robot NUNCA los toca
+const OLD_R = "Lentes de sol bloo · Tamarindo · Carey · Café"; // versión vieja a reemplazar
+const NEW_R = "Lentes de sol bloo · Tamarindo · Carey · Café Degradado";
 const DESC =
   Array.from({ length: 12 }, (_, i) => `Línea ${i + 1}: acetato pulido, protección UV400, estuche incluido. ₡`).join("\n") +
   "\n\nEnvíos a todo CR.";
@@ -30,6 +36,7 @@ const resetListings = () => {
     ["555", TITLE],
     ["700", TITLE_Q],
     ["701", TITLE_Q + " XL"], // contiene TITLE_Q como subcadena
+    ["800", OLD_R],
   ]);
 };
 
@@ -43,15 +50,23 @@ const sellingHtml = () =>
     .map(([id, t], i) => card(id, t, i))
     .join("")}</div></body></html>`;
 const itemHtml = (id) => `<!doctype html><html lang="es"><body><h1><span>${listings.get(id) || "?"}</span></h1>
-<button id="m">Marcar como agotado</button>
+<button id="m">${sold.includes(id) ? "Marcar como disponible" : "Marcar como agotado"}</button>
 <div role="dialog" id="d" hidden><p>¿Marcar como agotado?</p><button id="c">Confirmar</button></div>
 <script>
 m.onclick=()=>{d.hidden=false};
 c.onclick=()=>{d.remove(); m.textContent='Marcar como disponible'; fetch('/__sold/${id}',{method:'POST'})};
-</script></body></html>`;
+window.ITEM_ID=${JSON.stringify(id)}; window.BOOST_SCENARIO=${JSON.stringify(boostScenario)};
+</script>
+${promoted.has(id) ? "<p>Promoción en revisión</p>" : ""}
+${BOOST}
+</body></html>`;
 const CHECKPOINT = `<!doctype html><html lang="es"><body><h1>Confirma tu identidad</h1></body></html>`;
 
 let server, base, submits, sold, browser, context, tmp, files;
+let boostScenario = "ok";
+let singleInput = false; // input de fotos SIN "multiple" (sube de a una)
+const boosts = []; // POST /__boost: cada uno sería un cobro real
+const promoted = new Set();
 
 before(async () => {
   submits = [];
@@ -69,11 +84,17 @@ before(async () => {
           listings.set("999", s.titulo); // la nueva publicación aparece en Tus publicaciones
         }
         if (req.url.startsWith("/__sold/")) sold.push(req.url.split("/").pop());
+        if (req.url.startsWith("/__boost/")) {
+          const u = new URL(req.url, "http://x");
+          const id = u.pathname.split("/").pop();
+          boosts.push({ id, total: Number(u.searchParams.get("total")) });
+          promoted.add(id);
+        }
         res.end("ok");
       });
       return;
     }
-    if (req.url.startsWith("/marketplace/create/item")) return send(CREATE);
+    if (req.url.startsWith("/marketplace/create/item")) return send(singleInput ? CREATE.replace(' multiple accept=', " accept=") : CREATE);
     const m = req.url.match(/^\/marketplace\/item\/(\d+)/);
     if (m) return send(itemHtml(m[1]));
     if (req.url.startsWith("/marketplace/you/selling")) return send(sellingHtml());
@@ -85,8 +106,9 @@ before(async () => {
   base = `http://127.0.0.1:${server.address().port}`;
   ({ browser, context } = await launch({ headless: true }));
   tmp = mkdtempSync(path.join(tmpdir(), "robot-test-"));
-  files = [1, 2].map((i) => {
-    const f = path.join(tmp, `f${i}.png`);
+  // Orden del contrato: [foto IA del lente, foto fija del estuche].
+  files = ["foto-01-lente", "foto-02-estuche"].map((n) => {
+    const f = path.join(tmp, `${n}.png`);
     writeFileSync(f, Buffer.from("89504e470d0a1a0a", "hex"));
     return f;
   });
@@ -127,7 +149,7 @@ test("publicar: valores correctos y URL NUEVA aunque exista una vieja con el mis
     precio: "15000",
     descripcion: DESC,
     marca: "bloo",
-    fotos: 2,
+    fotos: ["foto-01-lente.png", "foto-02-estuche.png"], // las 2, en orden
     promo: false,
     categoria: "Joyería y accesorios",
     estado: "Nuevo",
@@ -174,5 +196,144 @@ test("quitar con URL cuyo título no coincide → error, no toca", { timeout: 12
 test("checkpoint → CheckpointError (necesita_humano)", { timeout: 60_000 }, async () => {
   const page = await context.newPage();
   await assert.rejects(publicar(page, task, files, { base: `${base}/bloqueado` }), CheckpointError);
+  await page.close();
+});
+
+test("publicar: input de fotos sin 'multiple' → sube las 2 de a una, en orden", { timeout: 180_000 }, async () => {
+  const page = await context.newPage();
+  singleInput = true;
+  try {
+    const r = await publicar(page, { ...task, kit: { ...task.kit, title: TITLE_Q + " Single" } }, files, { base });
+    assert.equal(r.submitted, true);
+    assert.deepEqual(submits.at(-1).fotos, ["foto-01-lente.png", "foto-02-estuche.png"]);
+  } finally {
+    singleInput = false;
+    await page.close();
+  }
+});
+
+const reemplazarTask = (boost = null) => ({
+  id: "tr",
+  action: "reemplazar",
+  oldTitle: OLD_R,
+  externalUrl: null,
+  kit: { ...task.kit, title: NEW_R },
+  images: ["https://x/1.jpg", "https://x/2.jpg"],
+  boost,
+});
+
+test("reemplazar: quita la vieja (título exacto), publica la nueva con 2 fotos y pauta dry → simulado", { timeout: 240_000 }, async () => {
+  const page = await context.newPage();
+  sold.length = 0;
+  boostScenario = "ok";
+  const nSubmits = submits.length;
+  const nBoosts = boosts.length;
+  const ev = [];
+  const r = await runTask(page, reemplazarTask({ mode: "dry", amountCrc: 500 }), {
+    base,
+    files,
+    deadline: Date.now() + 600_000,
+    onEvidence: async (p, note) => ev.push(note),
+  });
+  assert.deepEqual(sold, ["800"]); // solo la vieja
+  assert.equal(submits.length, nSubmits + 1);
+  assert.equal(submits.at(-1).titulo, NEW_R);
+  assert.deepEqual(submits.at(-1).fotos, ["foto-01-lente.png", "foto-02-estuche.png"]);
+  assert.equal(submits.at(-1).promo, false); // ensureNoPromote sigue en el formulario
+  assert.equal(r.status, "hecha");
+  assert.equal(r.externalUrl, `${base}/marketplace/item/999/`);
+  assert.equal(r.boost.status, "simulado", JSON.stringify(r.boost));
+  assert.equal(r.boost.amountCrc, 500);
+  assert.match(r.boost.detail, /₡500 CRC/);
+  assert.equal(boosts.length, nBoosts); // dry: NO se pulsó pagar
+  assert.ok(ev.some((n) => /pauta dry-run: total verificado ₡500 CRC/.test(n)), "captura del dry");
+  await page.close();
+});
+
+test("reemplazar: vieja NO encontrada → NeedsHumanError y NO publica", { timeout: 180_000 }, async () => {
+  const page = await context.newPage();
+  sold.length = 0;
+  const nSubmits = submits.length;
+  await assert.rejects(
+    reemplazar(page, { ...reemplazarTask(), oldTitle: "Lentes de sol bloo · No existe" }, files, { base }),
+    (e) => e instanceof NeedsHumanError && /no publico la nueva/.test(e.message)
+  );
+  assert.equal(submits.length, nSubmits);
+  assert.deepEqual(sold, []);
+  await page.close();
+});
+
+test("reemplazar: vieja ambigua (2 exactas) → NeedsHumanError y NO publica", { timeout: 180_000 }, async () => {
+  const page = await context.newPage();
+  sold.length = 0;
+  const nSubmits = submits.length;
+  await assert.rejects(reemplazar(page, { ...reemplazarTask(), oldTitle: MANUAL }, files, { base }), NeedsHumanError);
+  assert.equal(submits.length, nSubmits);
+  assert.deepEqual(sold, []);
+  await page.close();
+});
+
+const ITEM = () => `${base}/marketplace/item/555/`;
+
+test("pauta: Meta exige mínimo ₡1.000 → fallido con el mínimo visto, sin pagar", { timeout: 120_000 }, async () => {
+  const page = await context.newPage();
+  boostScenario = "min";
+  const n = boosts.length;
+  const ev = [];
+  const r = await promocionar(page, ITEM(), { mode: "on", amountCrc: 500 }, { onEvidence: async (p, note) => ev.push(note) });
+  assert.equal(r.status, "fallido");
+  assert.match(r.detail, /mínimo de ₡1000 CRC/);
+  assert.equal(boosts.length, n);
+  assert.equal(ev.length, 1); // captura del fallo
+  await page.close();
+});
+
+test("pauta: cuenta en dólares → fallido, sin pagar", { timeout: 120_000 }, async () => {
+  const page = await context.newPage();
+  boostScenario = "usd";
+  const n = boosts.length;
+  const r = await promocionar(page, ITEM(), { mode: "on", amountCrc: 500 });
+  assert.equal(r.status, "fallido");
+  assert.match(r.detail, /USD/);
+  assert.equal(boosts.length, n);
+  await page.close();
+});
+
+test("pauta: pantalla de agregar tarjeta → fallido, no se ingresa nada", { timeout: 120_000 }, async () => {
+  const page = await context.newPage();
+  boostScenario = "card";
+  const n = boosts.length;
+  const r = await promocionar(page, ITEM(), { mode: "on", amountCrc: 500 });
+  assert.equal(r.status, "fallido");
+  assert.match(r.detail, /tarjeta|método de pago/);
+  assert.equal(await page.locator("#cc").inputValue(), "");
+  assert.equal(boosts.length, n);
+  await page.close();
+});
+
+test("pauta on: paga UNA vez ₡500 y verifica; repetir no vuelve a pagar (idempotente)", { timeout: 180_000 }, async () => {
+  const page = await context.newPage();
+  boostScenario = "ok";
+  const n = boosts.length;
+  const r = await promocionar(page, ITEM(), { mode: "on", amountCrc: 500 });
+  assert.equal(r.status, "pagado", JSON.stringify(r));
+  assert.match(r.detail, /en revisión/);
+  assert.equal(boosts.length, n + 1);
+  assert.deepEqual(boosts.at(-1), { id: "555", total: 500 }); // presupuesto TOTAL = 500 (no diario × días)
+  const again = await promocionar(page, ITEM(), { mode: "on", amountCrc: 500 });
+  assert.equal(again.status, "pagado");
+  assert.match(again.detail, /ya estaba promocionada/);
+  assert.equal(boosts.length, n + 1);
+  await page.close();
+});
+
+test("pauta: monto del payload por encima del tope (₡5.000) → fallido sin abrir nada", async () => {
+  const r = await runTask(/** @type {any} */ (null), { id: "x", action: "noexiste" });
+  assert.equal(r.status, "fallida");
+  const page = await context.newPage();
+  const n = boosts.length;
+  const res = await promocionar(page, ITEM(), { mode: "on", amountCrc: 5000 });
+  assert.equal(res.status, "fallido");
+  assert.equal(boosts.length, n);
   await page.close();
 });
