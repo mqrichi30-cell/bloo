@@ -29,6 +29,7 @@ from PIL import Image, ImageFilter
 
 from .composite import OUTPUT_SIZES, to_jpeg
 from .cutout import cut_out, load_source, segment_alpha
+from .brand import stamp_logo
 from .edit import ESTUCHE_PROMPT, GEN_SIZE, build_reference, fidelity_gate, restore_product, to_outputs
 from .providers import OpenAIEdit, openai_ledger
 from .storage import Storage
@@ -134,7 +135,7 @@ def run(source: str, apply: bool, reuse: str | None, mock: bool, force: bool, cu
     if storage is None:
         raise SystemExit("--apply needs SUPABASE_URL and SUPABASE_SERVICE_KEY")
     for k, path in PATHS.items():
-        storage.upload(path, to_jpeg(outs[k], 92), "image/jpeg", cache_control="86400")
+        storage.upload(path, to_jpeg(stamp_logo(outs[k]), 92), "image/jpeg", cache_control="86400")
         print(storage.public_url(path))
     return 0
 

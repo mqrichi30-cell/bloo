@@ -22,6 +22,7 @@ import requests
 from PIL import Image
 
 from .bloo_api import BlooApi, Job
+from .brand import stamp_logo
 from .composite import OUTPUT_SIZES, composite, to_jpeg
 from .cutout import cut_out, load_source, segment_alpha
 from .edit import (EDIT_PROMPTS, GEN_SIZE, build_reference, correction_prompt, fidelity_gate,
@@ -361,8 +362,9 @@ def _upload(job: Job, variant: str, square: Image.Image, portrait: Image.Image, 
     ts = compact_ts()
     path = f"models/{job.model_id}/{variant}-{ts}.jpg"
     path45 = f"models/{job.model_id}/{variant}-{ts}-4x5.jpg"
-    storage.upload(path, to_jpeg(square, JPEG_Q), "image/jpeg")
-    storage.upload(path45, to_jpeg(portrait, JPEG_Q), "image/jpeg")
+    # logo after every check (the AI reviewer would flag it as "text or logo")
+    storage.upload(path, to_jpeg(stamp_logo(square), JPEG_Q), "image/jpeg")
+    storage.upload(path45, to_jpeg(stamp_logo(portrait), JPEG_Q), "image/jpeg")
     qa["portraitUrl"] = storage.public_url(path45)
     return {"estado": "lista", "publicUrl": storage.public_url(path), "storagePath": path,
             "provider": provider, "qa": qa}
