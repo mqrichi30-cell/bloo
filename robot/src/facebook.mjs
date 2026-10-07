@@ -187,14 +187,28 @@ async function openSellingAndScan(page, title, base) {
  * - 0 coincidencias → null (tras reintentar con recarga).
  * - >1 coincidencias (o un título exacto sin enlace junto a otros) → Error: nunca adivina.
  * @param {Page} page @param {string} title @param {string} [base]
- * @param {{exclude?: string[], attempts?: number}} [opts] exclude = ids que ya existían antes de publicar
+ * @param {{exclude?: string[], attempts?: number, activeOnly?: boolean}} [opts] exclude = ids que ya existían antes de publicar;
+ *   activeOnly = descartar las ya vendidas (para encontrar la vigente a quitar)
  */
 export async function findListingUrl(page, title, base = FB_BASE, opts = {}) {
   const exclude = new Set(opts.exclude || []);
   const attempts = opts.attempts ?? 3;
   for (let i = 0; i < attempts; i++) {
     const { ids, unresolved } = await resolveIds(page, title, base);
-    const fresh = ids.filter((id) => !exclude.has(id));
+    let fresh = ids.filter((id) => !exclude.has(id));
+    if (opts.activeOnly && fresh.length > 1 && unresolved === 0) {
+      // Buscando la publicación VIGENTE para quitarla: las ya vendidas (versiones viejas
+      // reemplazadas, mismo título) no cuentan.
+      const vivas = [];
+      for (const id of fresh) {
+        await go(page, `${base}/marketplace/item/${id}/`);
+        await assertNoCheckpoint(page);
+        const vendida = await firstVisible([page.getByRole("button", { name: /Marcar como disponible/i })], 4000);
+        if (!vendida) vivas.push(id);
+      }
+      log(`título repetido: ${fresh.length} con el título, ${vivas.length} vigente(s)`);
+      fresh = vivas;
+    }
     if (fresh.length > 1 || (fresh.length >= 1 && unresolved > 0)) {
       throw new Error(`Hay ${fresh.length + unresolved} publicaciones con el título exacto "${cleanTitle(title)}"; no adivino cuál`);
     }
@@ -512,7 +526,7 @@ export async function quitar(page, task, opts = {}) {
   if (!url) {
     if (!title) throw new Error("Tarea sin externalUrl ni título");
     // Solo título EXACTO; 0 o >1 coincidencias → fallida (nunca tocar los listados manuales).
-    url = await findListingUrl(page, title, base);
+    url = await findListingUrl(page, title, base, { activeOnly: true });
     if (!url) throw new Error(`No encontré ninguna publicación con el título exacto "${title}"`);
   }
   await go(page, url);
@@ -610,7 +624,7 @@ export async function reemplazar(page, task, files, opts = {}) {
   let oldUrl = task.externalUrl ? normalizeItemUrl(task.externalUrl, base) : null;
   if (!oldUrl) {
     try {
-      oldUrl = await findListingUrl(page, oldTitle, base, { attempts: 2 });
+      oldUrl = await findListingUrl(page, oldTitle, base, { attempts: 2, activeOnly: true });
     } catch (e) {
       if (e?.name === "CheckpointError") throw e;
       throw human(e instanceof Error ? e.message : String(e));
