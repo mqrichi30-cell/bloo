@@ -4,6 +4,7 @@
 //             de página completa. No toca presupuesto ni botones de pago.
 //   dry|on  → corre promocionar() normal con ₡500 (dry no paga).
 import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import { firstVisible, go } from "./facebook.mjs";
 import { log } from "./util.mjs";
 
@@ -24,6 +25,27 @@ export async function inspectBoost(page, url, outBase) {
   const p = (await popup) || page;
   await p.waitForLoadState("domcontentloaded", { timeout: 45_000 }).catch(() => {});
   await p.waitForTimeout(6000);
+  await dumpScreen(p, `${outBase}-1-inicio`);
+  // Abrir (sin confirmar nada) el presupuesto personalizado y la fecha de finalización.
+  const custom = await firstVisible([p.getByRole("button", { name: /Seleccionar presupuesto personalizado/i })], 5000);
+  if (custom) {
+    await custom.click();
+    await p.waitForTimeout(3000);
+    await dumpScreen(p, `${outBase}-2-personalizado`);
+    await p.keyboard.press("Escape").catch(() => {});
+    await p.waitForTimeout(1500);
+  }
+  const fin = await firstVisible([p.getByRole("radio", { name: /Elegir fecha de finalizaci[oó]n/i })], 5000);
+  if (fin) {
+    await fin.click();
+    await p.waitForTimeout(3000);
+    await dumpScreen(p, `${outBase}-3-fecha`);
+  }
+  log("inspect: listo (no se pulsó Publicar)");
+}
+
+/** @param {import('playwright').Page} p @param {string} outBase */
+async function dumpScreen(p, outBase) {
   const dump = await p.evaluate(() => {
     const sel = 'button,[role=button],[role=radio],[role=checkbox],[role=combobox],[role=tab],[role=slider],[role=spinbutton],[role=switch],[role=option],input,select,textarea,a[href]';
     const rows = [];
@@ -44,5 +66,5 @@ export async function inspectBoost(page, url, outBase) {
   });
   await writeFile(`${outBase}-inspect.txt`, scrub(`url: ${dump.url}\n\n== CONTROLES ==\n${dump.rows.join("\n")}\n\n== TEXTO ==\n${dump.text}\n`));
   await p.screenshot({ path: `${outBase}-inspect.png`, fullPage: true, timeout: 20_000 }).catch(() => {});
-  log(`inspect: ${dump.rows.length} controles volcados`);
+  log(`inspect: ${dump.rows.length} controles volcados (${path.basename(outBase)})`);
 }
