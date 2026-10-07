@@ -63,6 +63,14 @@ export const ROBOT_LEASE_MINUTES = 30;
  *  puede depender de cuántas corridas lleguen. Fallidas no cuentan (no
  *  llegaron a Facebook). */
 export const ROBOT_PACING_MINUTES = 110;
+/** Ritmo de publicaciones (publicar/reemplazar), decisión 2026-10-07: una al
+ *  día para que haya pauta diaria. Env ROBOT_PUBLISH_PACING_MINUTES (default
+ *  1440). 'quitar' (stock agotado) no espera esto, solo el ritmo general. */
+export function publishPacingMinutes(): number {
+  const n = Number(process.env.ROBOT_PUBLISH_PACING_MINUTES);
+  return Number.isFinite(n) && n >= ROBOT_PACING_MINUTES ? n : 1440;
+}
+const ACCIONES_PUBLICAN = ["publicar", "reemplazar"];
 
 /** Pauta pagada en Facebook tras publicar/reemplazar (decisión 2026-10-06).
  *  Colones enteros en el contrato con el robot; en la base va en céntimos. */
@@ -351,18 +359,43 @@ export async function contarListas(): Promise<number> {
   return rows[0]?.n ?? 0;
 }
 
-/** Cuándo se puede ejecutar la próxima tarea según el ritmo (null = ya). */
+/** Cuándo se puede ejecutar la próxima tarea según el ritmo (null = ya).
+ *  `general`: cualquier acción (110 min tras la última 'hecha').
+ *  `publicar`: publicar/reemplazar (publishPacingMinutes tras la última que publicó). */
+export async function ritmoRobot(
+  db: Prisma.TransactionClient | typeof prisma = prisma
+): Promise<{ general: Date | null; publicar: Date | null }> {
+  const [ultima, ultimaPub] = await Promise.all([
+    db.marketplaceTask.findFirst({
+      where: { status: "hecha", doneAt: { not: null } },
+      orderBy: { doneAt: "desc" },
+      select: { doneAt: true },
+    }),
+    db.marketplaceTask.findFirst({
+      where: { status: "hecha", doneAt: { not: null }, action: { in: ACCIONES_PUBLICAN } },
+      orderBy: { doneAt: "desc" },
+      select: { doneAt: true },
+    }),
+  ]);
+  const futuro = (d: Date | null | undefined, min: number) => {
+    if (!d) return null;
+    const next = new Date(d.getTime() + min * 60_000);
+    return next.getTime() > Date.now() ? next : null;
+  };
+  return { general: futuro(ultima?.doneAt, ROBOT_PACING_MINUTES), publicar: futuro(ultimaPub?.doneAt, publishPacingMinutes()) };
+}
+
+/** Próxima vez que hay algo ejecutable (null = ya hay): combina el ritmo con lo que está en cola. */
 export async function proximaHabilitada(
   db: Prisma.TransactionClient | typeof prisma = prisma
 ): Promise<Date | null> {
-  const ultima = await db.marketplaceTask.findFirst({
-    where: { status: "hecha", doneAt: { not: null } },
-    orderBy: { doneAt: "desc" },
-    select: { doneAt: true },
+  const r = await ritmoRobot(db);
+  if (r.general) return r.general;
+  if (!r.publicar) return null;
+  const quitar = await db.marketplaceTask.count({
+    where: { status: "pendiente", action: "quitar", attempts: { lt: ROBOT_MAX_ATTEMPTS } },
   });
-  if (!ultima?.doneAt) return null;
-  const next = new Date(ultima.doneAt.getTime() + ROBOT_PACING_MINUTES * 60_000);
-  return next.getTime() > Date.now() ? next : null;
+  return quitar > 0 ? null : r.publicar;
 }
 
 /** Pendientes que no se reparten todavía: su hero se está (re)generando o
@@ -401,7 +434,7 @@ interface TareaReclamada {
 export async function reclamarSiguiente(): Promise<{
   tarea: TareaReclamada | null;
   ocupado: boolean;
-  /** Fijado = no toca todavía por el ritmo de 110 min; no se reclamó nada. */
+  /** Fijado = no toca todavía por el ritmo (110 min general / publishPacingMinutes al publicar); no se reclamó nada. */
   nextDueAt: Date | null;
 }> {
   // Fuera de la transacción: es un HEAD HTTP, no se sostiene el lock por él.
@@ -411,8 +444,9 @@ export async function reclamarSiguiente(): Promise<{
 
     // Bajo el mismo lock que el claim: dos corridas solapadas no pueden
     // pasar las dos el control de ritmo.
-    const nextDueAt = await proximaHabilitada(tx);
-    if (nextDueAt) return { tarea: null, ocupado: false, nextDueAt };
+    const ritmo = await ritmoRobot(tx);
+    if (ritmo.general) return { tarea: null, ocupado: false, nextDueAt: ritmo.general };
+    const soloQuitar = ritmo.publicar !== null;
 
     // 'reemplazar' con lease vencido: terminal + pausa (ver
     // MOTIVO_REEMPLAZO_CORTADO). Va antes del UPDATE genérico.
@@ -454,11 +488,13 @@ export async function reclamarSiguiente(): Promise<{
          SELECT q."id" FROM ${SCHEMA}."MarketplaceTask" q
           WHERE q."status" = 'pendiente' AND q."attempts" < ${ROBOT_MAX_ATTEMPTS}
             AND NOT ${esperandoFoto(estucheOk)}
+            AND (${!soloQuitar} OR q."action" = 'quitar')
           ORDER BY q."createdAt" ASC, q."id" ASC
           LIMIT 1
           FOR UPDATE SKIP LOCKED
        )
       RETURNING t."id", t."listingId", t."action", t."externalUrl", t."createdAt", t."boostStatus"`;
+    if (!filas[0] && soloQuitar) return { tarea: null, ocupado: false, nextDueAt: ritmo.publicar };
     return { tarea: filas[0] ?? null, ocupado: false, nextDueAt: null };
   });
 }
