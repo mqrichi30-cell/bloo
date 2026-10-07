@@ -158,13 +158,24 @@ export async function scanExactTitle(page, title) {
   }, cleanTitle(title));
 }
 
-/** Abre "Tus publicaciones", espera y hace scroll para cargar tarjetas. @param {Page} page @param {string} title @param {string} base */
+/**
+ * Abre "Tus publicaciones" y hace scroll hasta ver el título o llegar al final de la lista
+ * (Facebook carga las tarjetas por tandas, más nuevas arriba: con 60+ publicaciones la más vieja
+ * queda muy abajo). @param {Page} page @param {string} title @param {string} base
+ */
 async function openSellingAndScan(page, title, base) {
   await go(page, `${base}/marketplace/you/selling`);
   await page.getByText(cleanTitle(title), { exact: true }).first().waitFor({ timeout: 15_000 }).catch(() => {});
-  for (let i = 0; i < 3; i++) {
+  let quiet = 0;
+  let lastHeight = 0;
+  for (let i = 0; i < 60 && quiet < 3; i++) {
+    const found = (await scanExactTitle(page, title)).ids.length > 0;
+    if (found && i >= 2) break; // al menos 3 tandas siempre: un duplicado podría estar justo debajo
     await page.mouse.wheel(0, 1500);
     await pause(700, 1400);
+    const h = await page.evaluate(() => document.body.scrollHeight);
+    quiet = h > lastHeight ? 0 : quiet + 1;
+    lastHeight = h;
   }
   return scanExactTitle(page, title);
 }
