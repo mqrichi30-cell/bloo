@@ -17,7 +17,9 @@ export async function firstVisible(candidates, timeout = 15_000) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
     for (const c of candidates) {
-      const l = c.first();
+      // Facebook suele tener copias ocultas del mismo botón (layout móvil, menús): la primera
+      // coincidencia puede estar oculta aunque haya una visible.
+      const l = c.filter({ visible: true }).first();
       if (await l.isVisible().catch(() => false)) return l;
     }
     await new Promise((r) => setTimeout(r, 400));
