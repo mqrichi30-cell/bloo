@@ -520,6 +520,15 @@ export async function quitar(page, task, opts = {}) {
     for (let i = 0; i < 3; i++) {
       const dlg = page.getByRole("dialog");
       if (!(await dlg.first().isVisible().catch(() => false))) break;
+      // Encuesta "¿Vendiste este artículo?": "Siguiente" queda deshabilitado hasta elegir una opción.
+      const skip = await firstVisible(
+        [dlg.getByRole("radio", { name: /Prefiero no responder|Prefer not to (say|answer)/i }), dlg.getByText(/^(Prefiero no responder|Prefer not to (say|answer))$/i)],
+        1500
+      );
+      if (skip) {
+        await skip.click();
+        await pause(600, 1200);
+      }
       const btn = await firstVisible(
         [dlg.getByRole("button", { name: /^(Confirmar|Marcar como (agotado|vendido)|Listo|Omitir|Aceptar|Siguiente|Nadie.*)$/i })],
         3000
