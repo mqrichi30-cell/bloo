@@ -20,6 +20,15 @@ on:
         description: "Forzar corrida aunque el servidor diga que aún no toca (due=false)"
         type: boolean
         default: false
+      boost_probe_url:
+        description: "Solo pauta sobre esta publicación (https://www.facebook.com/marketplace/item/<id>/); sin tarea"
+        type: string
+        default: ""
+      boost_probe_mode:
+        description: "inspect (vuelca la pantalla) | dry (no paga) | on (paga ₡500 verificado)"
+        type: choice
+        options: [inspect, dry, on]
+        default: inspect
 
 permissions:
   contents: read
@@ -42,7 +51,9 @@ jobs:
         id: pending
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          PROBE_URL: ${{ inputs.boost_probe_url }}
         run: |
+          if [ -n "${PROBE_URL}" ]; then echo "modo probe de pauta"; echo "run=true" >> "$GITHUB_OUTPUT"; exit 0; fi
           code=$(curl -sS --max-time 30 -o body.json -w '%{http_code}' \
             -H "x-cron-secret: ${CRON_SECRET}" "${BLOO_URL}/api/robot/pending-count" || echo 000)
           if [ "$code" != "200" ]; then
@@ -107,6 +118,8 @@ jobs:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
           FB_STORAGE_STATE_B64: ${{ secrets.FB_STORAGE_STATE_B64 }}
           ROBOT_DRY_RUN: ${{ inputs.dry_run == true && 'true' || 'false' }}
+          ROBOT_BOOST_PROBE_URL: ${{ inputs.boost_probe_url }}
+          ROBOT_BOOST_PROBE_MODE: ${{ inputs.boost_probe_mode }}
         run: node run.mjs
 
       # Solo capturas PNG (números de tarjeta tapados) + un .txt con URL sin query y el error/nota.
