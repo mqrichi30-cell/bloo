@@ -402,11 +402,22 @@ export async function promocionar(page, listingUrl, cfg, opts = {}) {
       await publicarBtn.click();
       log(`pauta: pulsado "Publicar" (una vez): ${resumen}`);
       const hasta = Date.now() + 45_000;
+      let enviada = false;
       while (Date.now() < hasta) {
         await pause(1500, 2500);
-        if (!/\/ad_center\/create\/listingad/.test(p.url()) || SUBMITTED_RE.test(await bodyText(p))) break;
+        // Confirmación real (2026-10-07): diálogo "Tus anuncios se están creando" · Estado "En revisión".
+        const t = await bodyText(p);
+        if (/Tus anuncios se est[aá]n creando/i.test(t) || SUBMITTED_RE.test(t)) {
+          enviada = true;
+          break;
+        }
       }
       await evidence(p, `pauta: Publicar pulsado (${resumen})`);
+      if (enviada) {
+        if (p !== page) await p.close().catch(() => {});
+        p = page;
+        return res("pagado", `${resumen}; Facebook: anuncio creado, estado "En revisión"`);
+      }
       if (p !== page) await p.close().catch(() => {});
       p = page;
       await go(p, listingUrl);
