@@ -9,7 +9,7 @@ const NAV_TIMEOUT = 45_000;
 /**
  * @typedef {import('playwright').Page} Page
  * @typedef {import('playwright').Locator} Locator
- * @typedef {{base?: string, dryRun?: boolean}} FlowOpts
+ * @typedef {{base?: string, dryRun?: boolean, exclude?: string[]}} FlowOpts
  */
 
 /** Primer locator visible de una lista de candidatos. @param {Locator[]} candidates @param {number} [timeout] */
@@ -191,23 +191,41 @@ export async function findListingUrl(page, title, base = FB_BASE, opts = {}) {
   const exclude = new Set(opts.exclude || []);
   const attempts = opts.attempts ?? 3;
   for (let i = 0; i < attempts; i++) {
-    const { ids, orphanCount } = await openSellingAndScan(page, title, base);
+    const { ids, unresolved } = await resolveIds(page, title, base);
     const fresh = ids.filter((id) => !exclude.has(id));
-    const total = fresh.length + orphanCount;
-    if (fresh.length > 1 || (fresh.length === 1 && orphanCount > 0) || (!exclude.size && orphanCount > 1)) {
-      throw new Error(`Hay ${total} publicaciones con el título exacto "${cleanTitle(title)}"; no adivino cuál`);
+    if (fresh.length > 1 || (fresh.length >= 1 && unresolved > 0)) {
+      throw new Error(`Hay ${fresh.length + unresolved} publicaciones con el título exacto "${cleanTitle(title)}"; no adivino cuál`);
     }
     if (fresh.length === 1) return `${base}/marketplace/item/${fresh[0]}/`;
-    if (!exclude.size && ids.length === 0 && orphanCount === 1) {
-      // Título exacto sin enlace visible: abrirlo y leer la URL.
-      await page.getByText(cleanTitle(title), { exact: true }).first().click();
-      await page.waitForURL(/\/marketplace\/item\/\d+/, { timeout: 15_000 }).catch(() => {});
-      const u = normalizeItemUrl(page.url(), base) || (await idFromListingDialog(page, title, base));
-      if (u) return u;
-    }
     if (i < attempts - 1) await pause(4000, 8000); // la publicación nueva puede tardar en aparecer
   }
   return null;
+}
+
+/**
+ * Ids de TODAS las publicaciones con título exacto. Las tarjetas de "Tus publicaciones" a veces no
+ * traen enlace (abren el diálogo "Tu publicación"): se abre cada una y se lee su id del diálogo.
+ * `unresolved` = tarjetas con el título cuyo id no se pudo leer (el llamador no debe adivinar).
+ * @param {Page} page @param {string} title @param {string} base
+ * @returns {Promise<{ids: string[], unresolved: number}>}
+ */
+async function resolveIds(page, title, base) {
+  const first = await openSellingAndScan(page, title, base);
+  const ids = new Set(first.ids);
+  if (!first.orphanCount) return { ids: [...ids], unresolved: 0 };
+  if (first.ids.length) return { ids: [...ids], unresolved: first.orphanCount }; // mezcla rara: no adivinar
+  const n = Math.min(first.orphanCount, 6);
+  for (let k = 0; k < n; k++) {
+    if (k > 0) await openSellingAndScan(page, title, base);
+    await page.getByText(cleanTitle(title), { exact: true }).nth(k).click().catch(() => {});
+    await page.waitForURL(/\/marketplace\/item\/\d+/, { timeout: 5000 }).catch(() => {});
+    const u = normalizeItemUrl(page.url(), base) || (await idFromListingDialog(page, title, base));
+    const id = u ? itemId(u) : null;
+    if (!id) return { ids: [...ids], unresolved: first.orphanCount - ids.size };
+    ids.add(id);
+    await page.keyboard.press("Escape").catch(() => {});
+  }
+  return { ids: [...ids], unresolved: Math.max(0, first.orphanCount - ids.size) };
 }
 
 /**
@@ -238,7 +256,7 @@ async function idFromListingDialog(page, title, base) {
 /** Ids con título exacto que ya existen (antes de publicar). Nunca falla. @param {Page} page @param {string} title @param {string} base */
 async function existingIds(page, title, base) {
   try {
-    return (await openSellingAndScan(page, title, base)).ids;
+    return (await resolveIds(page, title, base)).ids;
   } catch (e) {
     if (e?.name === "CheckpointError") throw e;
     return [];
@@ -389,7 +407,7 @@ export async function publicar(page, task, files, opts = {}) {
 
   // Ids con el mismo título exacto que ya existían (p. ej. una versión vieja vendida):
   // así, tras publicar, la URL nueva es la ÚNICA id que no estaba antes.
-  const prior = opts.dryRun ? [] : await existingIds(page, kit.title, base);
+  const prior = opts.dryRun ? [] : [...new Set([...(await existingIds(page, kit.title, base)), ...(opts.exclude || [])])];
   if (prior.length) log(`ya había ${prior.length} publicación(es) con el mismo título exacto`);
 
   await go(page, `${base}/marketplace/create/item`);
@@ -621,6 +639,7 @@ export async function reemplazar(page, task, files, opts = {}) {
     }
   }
 
-  const r = await publicar(page, task, files, opts);
+  // La vieja (ya vendida) suele tener el mismo título: nunca confundirla con la nueva.
+  const r = await publicar(page, task, files, { ...opts, exclude: [...(opts.exclude || []), itemId(oldUrl) || ""].filter(Boolean) });
   return { ...r, oldMethod: q.method, oldUrl };
 }
