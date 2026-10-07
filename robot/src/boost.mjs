@@ -339,6 +339,81 @@ export async function promocionar(page, listingUrl, cfg, opts = {}) {
     }
     await pause(2000, 4000);
 
+    // Pantalla real de Facebook (verificada 2026-10-07): /ad_center/create/listingad/ con presupuesto
+    // DIARIO en opciones fijas (₡465, ₡930…; por defecto ₡1.860) y duración "continua". Pago único =
+    // la opción fija más alta ≤ amountCrc + "Elegir fecha de finalización" con 1 día.
+    if (/\/ad_center\/create\/listingad/.test(p.url())) {
+      await p.waitForLoadState("domcontentloaded").catch(() => {});
+      await guard(p);
+      const fin = await firstVisible([p.getByRole("radio", { name: /Elegir fecha de finalizaci[oó]n/i })], 15_000);
+      if (!fin) return await fail('listingad: no encontré "Elegir fecha de finalización"; no se pagó');
+      await fin.click();
+      await pause(1500, 2500);
+      const dias = await firstVisible([p.locator('input[type="number"]')], 8000);
+      if (!dias) return await fail("listingad: no encontré el campo de días; no se pagó");
+      const valor = async () => (await dias.inputValue().catch(() => "")).trim();
+      await dias.fill("1");
+      await dias.press("Tab").catch(() => {});
+      await pause(1200, 2000);
+      for (let i = 0; i < 10 && (await valor()) !== "1"; i++) {
+        const menos = await firstVisible([p.getByRole("button", { name: /^Disminuir$/i })], 2000);
+        if (!menos) break;
+        await menos.click();
+        await pause(400, 800);
+      }
+      if ((await valor()) !== "1") return await fail(`listingad: la duración quedó en "${await valor()}" días, no 1; no se pagó`);
+
+      // Opción fija más alta que no pase del monto aprobado.
+      const radios = p.getByRole("radio");
+      /** @type {{i: number, amount: number}|null} */
+      let best = null;
+      for (let i = 0, n = await radios.count(); i < n; i++) {
+        const first = ((await radios.nth(i).innerText().catch(() => "")) || "").split("\n")[0].trim();
+        const m = first.match(/^₡\s?([\d.,]+)$/);
+        const amt = m ? parseAmount(m[1]) : null;
+        if (amt !== null && amt <= amountCrc && (!best || amt > best.amount)) best = { i, amount: amt };
+      }
+      if (!best) return await fail(`listingad: no hay presupuesto fijo ≤ ₡${amountCrc}; no se pagó`);
+      await radios.nth(best.i).click();
+      await pause(1500, 2500);
+      if ((await radios.nth(best.i).getAttribute("aria-checked").catch(() => null)) === "false") {
+        return await fail(`listingad: no quedó seleccionado ₡${best.amount}; no se pagó`);
+      }
+      await guard(p);
+
+      // Verificación final del "Resumen del pago" justo antes de publicar.
+      const text = await bodyText(p);
+      const tm = text.match(/Presupuesto total\s*₡\s?([\d.,]+)\s*CRC/i);
+      const total = tm ? parseAmount(tm[1]) : null;
+      if (total === null) return await fail("listingad: no pude leer el presupuesto total; no se pagó");
+      if (total !== best.amount || total > amountCrc) return await fail(`listingad: presupuesto total ₡${total}, esperado ₡${best.amount}; no se pagó`);
+      if (!/durante 1 d[ií]a\b/i.test(text) || /circulaci[oó]n continuamente/i.test(text)) {
+        return await fail("listingad: el resumen no dice 1 día (podría quedar continua); no se pagó");
+      }
+      const resumen = `₡${total} CRC por 1 día (+IVA ≈ ₡${conIva(total)})`;
+      if (cfg.mode === "dry") {
+        log(`pauta dry: ${resumen}; NO se pulsó "Publicar"`);
+        await evidence(p, `pauta dry-run: ${resumen}; NO se pulsó "Publicar"`);
+        return res("simulado", `${resumen}; "Publicar" sin pulsar`);
+      }
+      const publicarBtn = await firstVisible([p.getByRole("button", { name: /^Publicar$/i })], 5000);
+      if (!publicarBtn) return await fail('listingad: no encontré "Publicar"; no se pagó');
+      clicked = true;
+      await publicarBtn.click();
+      log(`pauta: pulsado "Publicar" (una vez): ${resumen}`);
+      const hasta = Date.now() + 45_000;
+      while (Date.now() < hasta) {
+        await pause(1500, 2500);
+        if (!/\/ad_center\/create\/listingad/.test(p.url()) || SUBMITTED_RE.test(await bodyText(p))) break;
+      }
+      await evidence(p, `pauta: Publicar pulsado (${resumen})`);
+      if (p !== page) await p.close().catch(() => {});
+      p = page;
+      await go(p, listingUrl);
+      if (isAlreadyPromoted(await bodyText(p))) return res("pagado", `${resumen}; estado verificado en la publicación`);
+      return res("pagado", `SIN VERIFICAR: se pulsó "Publicar" una vez (${resumen}); revisar en Centro de anuncios`);
+    }
+
     let budgetSet = false;
     for (let step = 0; step < 5; step++) {
       await guard(p);
