@@ -8,6 +8,14 @@
 - susan/ashley creadas en prod (vendedor, activo). **BLOQUEADO: no hay `/api/auth/forgot` ni `lib/mailer.ts` en el código** (solo documentados en `.env.example` como si existieran) y no hay SMTP configurado en Netlify — no pueden entrar hasta que alguien construya el flujo de reset por correo o Cris les dé una contraseña a mano.
 - Deploy: el auto-deploy de Netlify por push a `master` está roto desde antes de esta sesión (`npm ci` falla en su CI con exit code 2 en varios commits previos, incluyendo el HEAD anterior a este). Se deployó a mano con `netlify deploy --build --prod` (mismo mecanismo que los últimos deploys "ready" del historial). Alguien necesita mirar el log de build de Netlify (la CLI no expone el texto completo) para arreglar el auto-deploy.
 
+## 2026-10-06 — GPT Sunburst + estuche fijo + pauta ₡500 + reemplazo (commit local ab4cfc7, SIN push)
+- Fotos: solo hero, OpenAI gpt-image-2.5-sunburst calidad max, 1 intento pagado (respaldo cfedit). Sin delay en IA; delay solo robot FB (~110 min).
+- Publicación = [hero, foto fija estuche `fixed/estuche-estandar-4x5.jpg`]. Precio Marketplace ₡17.500 (env MARKETPLACE_PRICE_CRC); POS sigue ₡16.500.
+- Pauta ₡500 tras publicar: ROBOT_BOOST_MODE dry (default) → on cuando Cris apruebe captura. Tope ROBOT_BOOST_MAX_PER_DAY=12.
+- Reemplazo: PRUEBA 5 (Corobicí, Limón, Nosara, Osa, Sierpe). Resto (52) solo cuando Cris diga en chat: `npx tsx --env-file=.env scripts/2026-10-06-reemplazo-publicaciones.ts --limit 100 --apply`.
+- Orden de despliegue: (1) OPENAI_API_KEY en GH secrets + imagegen/.env.local (Cris) (2) `python -m imagegen.estuche` → Cris aprueba → `--reuse ... --apply` (3) migración `node --env-file=.env scripts/2026-10-06-marketplace-reemplazar-boost.mjs --apply` ANTES del deploy (4) push + deploy + env Netlify (GH_DISPATCH_TOKEN, ROBOT_BOOST_MODE=dry) (5) script cancelar-flatlay-detail --apply (6) reemplazo --apply (5).
+- Pendiente UI: mostrar `pauta` (verificado/no) en components/marketplace.
+
 ## Objetivo
 Inventario de lentes → anuncio por color en pestaña Market (kit 1-toque, Marketplace no tiene API en CR) + 3 fotos de marca por color generadas gratis (recorte real del producto + fondo IA) + auto-reply Messenger. Todo debe correr solo, sin la PC de Cris ni tokens de Claude.
 
