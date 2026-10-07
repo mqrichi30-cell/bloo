@@ -121,23 +121,26 @@ export function renderKit(input: KitInput, opts: { agotado?: boolean } = {}): Ki
     ? `AGOTADO · Este estilo de bloo ya se vendió. Tenemos otros estilos disponibles: míralos en @bloo_cr o escríbenos al WhatsApp ${WHATSAPP_OTROS_ESTILOS}`
     : `Lentes de sol bloo · ${input.nombre}`;
 
+  // Formato del dueño (2026-10-07): un solo bloque, sin repetir el saludo de
+  // Messenger (renderSaludo es SOLO para la respuesta automática) y con el
+  // WhatsApp corto; el link largo con mensaje prellenado afeaba la descripción.
   const lineas = [
     primeraLinea,
-    "MADE FOR SUNNY DAYS…",
+    "Made for sunny days.",
     "",
     // Sin color confirmado no se inventa uno: la línea se omite.
-    ...(color ? [`· Color: ${color}`] : []),
-    ...(material ? [`· Marco de ${material}`] : []),
-    `· Precio: ${formatPrecioKit(input.precioVentaCent)}`,
+    ...(color ? [`Color: ${color}`] : []),
+    ...(material ? [`Marco de ${material}`] : []),
+    "Incluye estuche y paño bloo",
     "",
-    "Envíos a todo el país por Correos de Costa Rica y en el GAM con Uber Flash.",
-    "Pago por SINPE Móvil.",
+    formatPrecioKit(input.precioVentaCent),
     "",
-    `WhatsApp: ${whatsappUrl}`,
+    "Envíos a todo el país por Correos de Costa Rica y en el GAM con Uber Flash. Pago por SINPE Móvil.",
+    "",
+    `WhatsApp: ${WHATSAPP_BASE.replace(/^https:\/\//, "")}`,
     "Instagram: @bloo_cr",
-    "Somos un emprendimiento costarricense. Conoce también nuestro segundo emprendimiento: saps.cr",
     "",
-    renderSaludo(input.nombre, { avisoIA: false }),
+    "bloo es un emprendimiento costarricense. Conoce también nuestro segundo emprendimiento: saps.cr",
   ];
 
   return { title: titulo(input.nombre, color), description: lineas.join("\n"), whatsappUrl };
