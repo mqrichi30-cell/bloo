@@ -52,6 +52,15 @@ export async function inspectCreate(page, outBase) {
   log("inspect_create: listo (no se publicó nada)");
 }
 
+/** Pantalla de EDITAR una publicación (no guarda nada). @param {import('playwright').Page} page @param {string} url @param {string} outBase */
+export async function inspectEdit(page, url, outBase) {
+  const id = (url.match(/\/item\/(\d+)/) || [])[1];
+  await go(page, `https://www.facebook.com/marketplace/edit/?listing_id=${id}`);
+  await page.waitForTimeout(8000);
+  await dumpScreen(page, `${outBase}-edit`);
+  log("inspect_edit: listo (no se guardó nada)");
+}
+
 /** @param {import('playwright').Page} p @param {string} outBase */
 async function dumpScreen(p, outBase) {
   const dump = await p.evaluate(() => {

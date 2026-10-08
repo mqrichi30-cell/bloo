@@ -16,7 +16,7 @@ import { CheckpointError, NeedsHumanError } from "./src/checkpoint.mjs";
 import { downloadImages } from "./src/images.mjs";
 import { runTask } from "./src/runner.mjs";
 import { promocionar } from "./src/boost.mjs";
-import { inspectBoost, inspectCreate } from "./src/probe.mjs";
+import { inspectBoost, inspectCreate, inspectEdit } from "./src/probe.mjs";
 import { log, safeUrl, shortError } from "./src/util.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -71,7 +71,9 @@ async function probe() {
     const page = await session.context.newPage();
     await mkdir(ARTIFACTS, { recursive: true });
     const outBase = path.join(ARTIFACTS, `${new Date().toISOString().replace(/[:.]/g, "-")}-probe`);
-    if (mode === "inspect_create") {
+    if (mode === "inspect_edit") {
+      await inspectEdit(page, url, outBase);
+    } else if (mode === "inspect_create") {
       await inspectCreate(page, outBase);
     } else if (mode === "inspect") {
       await inspectBoost(page, url, outBase);
