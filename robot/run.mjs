@@ -16,7 +16,7 @@ import { CheckpointError, NeedsHumanError } from "./src/checkpoint.mjs";
 import { downloadImages } from "./src/images.mjs";
 import { runTask } from "./src/runner.mjs";
 import { promocionar } from "./src/boost.mjs";
-import { inspectBoost, inspectCreate, inspectEdit } from "./src/probe.mjs";
+import { inspectBoost, inspectCreate, inspectEdit, setDescription } from "./src/probe.mjs";
 import { log, safeUrl, shortError } from "./src/util.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -71,7 +71,11 @@ async function probe() {
     const page = await session.context.newPage();
     await mkdir(ARTIFACTS, { recursive: true });
     const outBase = path.join(ARTIFACTS, `${new Date().toISOString().replace(/[:.]/g, "-")}-probe`);
-    if (mode === "inspect_edit") {
+    if (mode === "set_description") {
+      // workflow_dispatch solo acepta una línea: los saltos vienen como "\n" literal.
+      const text = String(process.env.ROBOT_PROBE_TEXT || "").split("\\n").join("\n");
+      await setDescription(page, url, text, (p, note) => saveEvidence(p, "probe", note));
+    } else if (mode === "inspect_edit") {
       await inspectEdit(page, url, outBase);
     } else if (mode === "inspect_create") {
       await inspectCreate(page, outBase);

@@ -24,10 +24,14 @@ on:
         description: "Solo pauta sobre esta publicación (https://www.facebook.com/marketplace/item/<id>/); sin tarea"
         type: string
         default: ""
+      probe_text:
+        description: "Texto para set_description (saltos de línea como \n)"
+        type: string
+        default: ""
       boost_probe_mode:
         description: "inspect (vuelca la pantalla) | dry (no paga) | on (paga ₡500 verificado)"
         type: choice
-        options: ["inspect", "dry", "on", "inspect_create", "inspect_edit"]
+        options: ["inspect", "dry", "on", "inspect_create", "inspect_edit", "set_description"]
         default: inspect
 
 permissions:
@@ -120,6 +124,7 @@ jobs:
           ROBOT_DRY_RUN: ${{ inputs.dry_run == true && 'true' || 'false' }}
           ROBOT_BOOST_PROBE_URL: ${{ inputs.boost_probe_url }}
           ROBOT_BOOST_PROBE_MODE: ${{ inputs.boost_probe_mode }}
+          ROBOT_PROBE_TEXT: ${{ inputs.probe_text }}
         run: node run.mjs
 
       # Solo capturas PNG (números de tarjeta tapados) + un .txt con URL sin query y el error/nota.

@@ -61,6 +61,27 @@ export async function inspectEdit(page, url, outBase) {
   log("inspect_edit: listo (no se guardó nada)");
 }
 
+/** Cambia SOLO la descripción de una publicación y pulsa "Actualizar". @param {import('playwright').Page} page @param {string} url @param {string} text @param {(p: any, note: string) => Promise<void>} evidence */
+export async function setDescription(page, url, text, evidence) {
+  const id = (url.match(/\/item\/(\d+)/) || [])[1];
+  if (!text.trim()) throw new Error("set_description: texto vacío");
+  await go(page, `https://www.facebook.com/marketplace/edit/?listing_id=${id}`);
+  await page.waitForTimeout(6000);
+  const area = page.locator("textarea").filter({ hasText: /Lentes de sol bloo/ }).first();
+  if (!(await area.isVisible().catch(() => false))) throw new Error("set_description: no encontré la descripción actual");
+  await area.click();
+  await area.fill(text);
+  await page.waitForTimeout(1500);
+  const actual = (await area.inputValue().catch(() => "")).trim();
+  if (actual !== text.trim()) throw new Error("set_description: el texto no quedó igual; no guardo");
+  const btn = await firstVisible([page.getByRole("button", { name: /^Actualizar$/ })], 8000);
+  if (!btn) throw new Error('set_description: no encontré "Actualizar"');
+  await btn.click();
+  await page.waitForTimeout(6000);
+  await evidence(page, "set_description: Actualizar pulsado");
+  log("set_description: descripción actualizada");
+}
+
 /** @param {import('playwright').Page} p @param {string} outBase */
 async function dumpScreen(p, outBase) {
   const dump = await p.evaluate(() => {
