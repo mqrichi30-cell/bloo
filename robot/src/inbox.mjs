@@ -8,7 +8,7 @@
 //
 // Regla stateless (sin base de datos), por hilo cuyo artículo empieza con "Lentes de sol bloo" (sin importar
 // mayúsculas: incluye las publicaciones manuales viejas "Lentes de sol Bloo", decisión de Cris 2026-10-08)
-// (mayúsculas incluidas: los manuales "Lentes de sol Bloo" del dueño no se tocan):
+// Solo publicaciones de LENTES: el título tiene que empezar con "Lentes de sol bloo"; otros artículos nunca.
 //   - vista previa "Tú: …"                          → ya respondido, ni se abre (no se marca leído)
 //   - se abre: algún mensaje "por Tú"               → ya respondido, no se toca
 //   - sin "X inició este chat" (historial parcial)  → incierto, no se toca

@@ -24,7 +24,7 @@ test("inbox: parseRow separa nombre/título y detecta vista previa del vendedor"
   assert.equal(r.title, "Lentes de sol bloo · Corobicí · Leopardo · Seco");
   assert.ok(r.isBloo && r.sellerLast && !r.unread);
   const manual = parseRow("Chat en grupo: Brenda · Lentes de sol Bloo", "Brenda · Lentes de sol BlooMensaje no leído:Hola · 2 d");
-  assert.ok(!manual.isBloo, "los manuales 'Lentes de sol Bloo' no son del robot");
+  assert.ok(manual.isBloo, "los manuales 'Lentes de sol Bloo' también son lentes de bloo (decisión 2026-10-08)");
   assert.ok(manual.unread && !manual.sellerLast);
   assert.ok(!parseRow("Chat en grupo: Juan · Disfraz de Hugh Hefner", "…").isBloo);
   assert.equal(maskName("Sharon"), "S***");
@@ -58,7 +58,8 @@ const resetState = () => {
     doubleSend: false,
     threads: [
       t("1", "Sharon", "Lentes de sol bloo · Corobicí · Leopardo · Seco", [{ from: "Sharon", text: "Hola. ¿Sigue estando disponible?" }, { from: "Tú", text: "89433677" }]),
-      t("2", "Brenda", "Lentes de sol Bloo", [{ from: "Brenda", text: "Hola" }], { unread: true }),
+      // Manual viejo "Lentes de sol Bloo": ahora SÍ es de bloo (2026-10-08); ya respondido → no se abre.
+      t("2", "Brenda", "Lentes de sol Bloo", [{ from: "Brenda", text: "Hola" }, { from: "Tú", text: "Hola, sí" }]),
       t("3", "Juan", "Disfraz de Hugh Hefner (el dueño de la playboy) Talla S/M", [{ from: "Juan", text: "¿Sigue disponible?" }]),
       t("4", "Ana", "Lentes de sol bloo · Jacó · Gris Transparente", [{ from: "Ana", text: "Hola, ¿precio?" }], { unread: true }),
       t("5", "Luis", "Lentes de sol bloo · Limón · Negro · Gris Gradiente", [{ from: "Luis", text: "Hola" }, { from: "Tú", text: "Sí, disponible" }, { from: "Luis", text: "¿Y el envío?" }], { unread: true }),
@@ -120,7 +121,7 @@ test("inbox dry: lista solo hilos bloo sin respuesta del vendedor y no envía na
   const r = await run({ dryRun: true });
   assert.equal(sends.length, 0);
   assert.equal(r.rows, 7);
-  assert.equal(r.bloo, 5, "Brenda (Bloo manual) y Juan (disfraz) quedan fuera");
+  assert.equal(r.bloo, 6, "solo Juan (disfraz, no son lentes) queda fuera");
   assert.equal(r.planned, 2);
   assert.equal(byTitle(r, "Ana").result, "RESPONDERÍA");
   assert.equal(byTitle(r, "Ivan").result, "RESPONDERÍA");
