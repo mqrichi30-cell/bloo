@@ -485,6 +485,10 @@ export async function publicar(page, task, files, opts = {}) {
   await pause(1500, 3000);
   await assertNoCheckpoint(page);
   await ensureNoPromote(page);
+  // Diagnóstico (2026-10-07): ¿el paso 2 ofrece respuestas automáticas de Meta AI para compradores?
+  const paso2 = await page.locator("body").innerText().catch(() => "");
+  const autoReply = paso2.split("\n").filter((l) => /respuesta|Meta AI|autom[aá]tic|auto-?repl/i.test(l)).slice(0, 8);
+  log(`paso 2: ${autoReply.length ? `opciones de respuesta → ${autoReply.join(" | ").slice(0, 400)}` : "sin opciones de respuesta automática"}`);
 
   const publish = await firstVisible([page.getByRole("button", { name: /^Publicar$/ })], 20_000);
   if (!publish) throw new Error('No encontré el botón "Publicar" (¿faltó algún campo obligatorio?)');
