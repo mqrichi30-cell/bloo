@@ -94,7 +94,8 @@ export function countReplies(labels) {
  * @typedef {{label: string, name: string, title: string, preview: string, unread: boolean, isBloo: boolean, sellerLast: boolean}} Row
  * @typedef {{who: string, title: string, result: string, reason: string}} Outcome
  * @typedef {{base?: string, dryRun?: boolean, maxReplies?: number, deadline?: number,
- *   onEvidence?: (page: Page, note: string) => Promise<void>}} InboxOpts
+ *   openAll?: boolean, onEvidence?: (page: Page, note: string) => Promise<void>}} InboxOpts
+ *   openAll: SOLO en dry, abre también los hilos con vista previa "Tú:" (validar selectores en vivo).
  */
 
 /** Abre el desplegable de Messenger y la carpeta Marketplace. @param {Page} page */
@@ -306,7 +307,7 @@ export async function runInbox(page, opts = {}) {
   let sent = 0;
   let planned = 0;
   for (const row of bloo) {
-    if (row.sellerLast) {
+    if (row.sellerLast && !(dry && opts.openAll)) {
       note(row, "no tocar", 'ya respondido (vista previa "Tú:"; no se abre)');
       continue;
     }
@@ -322,6 +323,7 @@ export async function runInbox(page, opts = {}) {
     const d = decideThread({ labels: chatLabels(chat), started: chat.started });
     if (d.action === "saltar") {
       note(row, "no tocar", d.reason);
+      if (dry && opts.openAll) await opts.onEvidence?.(page, `inbox dry (abrir todo): ${maskName(row.name)} · ${d.reason}`);
       await closeChat(page);
       if (row.unread) await restoreUnread(page, row);
       continue;

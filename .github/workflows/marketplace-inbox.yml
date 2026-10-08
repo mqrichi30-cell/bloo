@@ -23,6 +23,10 @@ on:
         description: "Dry-run: solo lista (log + captura) qué hilos respondería; NO envía nada"
         type: boolean
         default: true
+      open_all:
+        description: "Solo con dry_run: abrir también hilos ya respondidos (validar selectores; los no leídos vuelven a no leído)"
+        type: boolean
+        default: false
       max_replies:
         description: "Tope de respuestas en esta corrida (0-10)"
         type: string
@@ -111,6 +115,7 @@ jobs:
           FB_STORAGE_STATE_B64: ${{ secrets.FB_STORAGE_STATE_B64 }}
           # Cron = real; manual = lo que diga dry_run (por defecto true).
           ROBOT_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run == true && 'true' || 'false' }}
+          INBOX_OPEN_ALL: ${{ inputs.open_all == true && 'true' || 'false' }}
           INBOX_MAX_REPLIES: ${{ inputs.max_replies || '10' }}
           ROBOT_BUDGET_MS: "330000"
         run: |

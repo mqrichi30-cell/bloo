@@ -113,6 +113,7 @@ async function inbox() {
       dryRun,
       maxReplies: Number.isInteger(max) && max >= 0 && max <= 10 ? max : 10,
       deadline: DEADLINE,
+      openAll: dryRun && process.env.INBOX_OPEN_ALL === "true",
       onEvidence: (p, note) => saveEvidence(p, dryRun ? "inbox-dry" : "inbox", note),
     });
     await mkdir(ARTIFACTS, { recursive: true });
