@@ -11,7 +11,7 @@
 #     15 × 30 × 1 min ≈ 450 min/mes (con respuestas algunos días, ~500).
 #   - marketplace-robot ociosa ≈ 24 × 30 × 1 = 720 min/mes; imagegen ociosa ≈ 4 × 30 × 1 = 120 min/mes.
 #     Total ocioso ≈ 1.300 min/mes de 2.000: quedan ~700 para tareas reales del robot y fotos IA.
-#     Si se queda corto: pasar este cron a cada 2 h ("47 1,3,13-23/2 * * *" ≈ 360 min/mes).
+#     Si se queda corto: pasar este cron a cada 2 h ("47 1,3,13-23/2 * * *" = 8 corridas/día ≈ 240 min/mes).
 name: marketplace-inbox
 
 on:
