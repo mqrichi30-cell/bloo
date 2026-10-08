@@ -16,7 +16,7 @@ import { CheckpointError, NeedsHumanError } from "./src/checkpoint.mjs";
 import { downloadImages } from "./src/images.mjs";
 import { runTask } from "./src/runner.mjs";
 import { promocionar } from "./src/boost.mjs";
-import { inspectBoost, inspectCreate, inspectEdit, inspectInbox, inspectUrl, setDescription } from "./src/probe.mjs";
+import { inspectBoost, inspectCreate, inspectDock, inspectEdit, inspectInbox, inspectUrl, setDescription } from "./src/probe.mjs";
 import { log, safeUrl, shortError } from "./src/util.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -65,13 +65,15 @@ async function saveEvidence(page, taskId, error) {
 async function probe() {
   const url = process.env.ROBOT_BOOST_PROBE_URL || "";
   const mode = process.env.ROBOT_BOOST_PROBE_MODE || "inspect";
-  if (mode !== "inspect_create" && mode !== "inspect_url" && mode !== "inspect_inbox" && !/^https:\/\/www\.facebook\.com\/marketplace\/item\/\d+\/?$/.test(url)) throw new Error("boost_probe_url inválida");
+  if (mode !== "inspect_create" && mode !== "inspect_url" && mode !== "inspect_inbox" && mode !== "inspect_dock" && !/^https:\/\/www\.facebook\.com\/marketplace\/item\/\d+\/?$/.test(url)) throw new Error("boost_probe_url inválida");
   const session = await launch({ headless: true, storageState: loadStorageState() });
   try {
     const page = await session.context.newPage();
     await mkdir(ARTIFACTS, { recursive: true });
     const outBase = path.join(ARTIFACTS, `${new Date().toISOString().replace(/[:.]/g, "-")}-probe`);
-    if (mode === "inspect_inbox") {
+    if (mode === "inspect_dock") {
+      await inspectDock(page, String(process.env.ROBOT_PROBE_TEXT || "").trim(), outBase);
+    } else if (mode === "inspect_inbox") {
       await inspectInbox(page, String(process.env.ROBOT_PROBE_TEXT || "").trim(), outBase);
     } else if (mode === "inspect_url") {
       await inspectUrl(page, String(process.env.ROBOT_PROBE_TEXT || "").trim(), outBase);

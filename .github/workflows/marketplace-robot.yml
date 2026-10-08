@@ -31,7 +31,7 @@ on:
       boost_probe_mode:
         description: "inspect (vuelca la pantalla) | dry (no paga) | on (paga ₡500 verificado)"
         type: choice
-        options: ["inspect", "dry", "on", "inspect_create", "inspect_edit", "set_description", "inspect_url", "inspect_inbox"]
+        options: ["inspect", "dry", "on", "inspect_create", "inspect_edit", "set_description", "inspect_url", "inspect_inbox", "inspect_dock"]
         default: inspect
 
 permissions:

@@ -154,3 +154,30 @@ export async function inspectInbox(page, url, outBase) {
   await writeFile(`${outBase}-2-filas.txt`, rows.join("\n"));
   log(`inspect_inbox: ${rows.length} enlaces de hilos (solo lectura)`);
 }
+
+/**
+ * Chat acoplado (botón "Messenger" del encabezado) desde una página SIN el modal de PIN. Solo lectura:
+ * abre el desplegable, la carpeta Marketplace y el hilo cuyo nombre contiene `who` (no escribe nada).
+ * @param {import('playwright').Page} page @param {string} who @param {string} outBase
+ */
+export async function inspectDock(page, who, outBase) {
+  await go(page, "https://www.facebook.com/marketplace/you/selling/");
+  await page.waitForTimeout(4000);
+  const btn = await firstVisible([page.getByRole("button", { name: /^Messenger$/ })], 10_000);
+  if (!btn) throw new Error('inspect_dock: no encontré el botón "Messenger"');
+  await btn.click();
+  await page.waitForTimeout(4000);
+  await dumpScreen(page, `${outBase}-1-desplegable`);
+  const folder = await firstVisible([page.getByRole("button", { name: /^Marketplace/ }), page.getByRole("link", { name: /^Marketplace/ }), page.getByRole("row", { name: /^Marketplace/ }), page.getByText(/^Marketplace$/)], 8000);
+  if (!folder) throw new Error("inspect_dock: no encontré la carpeta Marketplace en el desplegable");
+  await folder.click();
+  await page.waitForTimeout(4000);
+  await dumpScreen(page, `${outBase}-2-carpeta`);
+  if (!who) return;
+  const row = await firstVisible([page.getByRole("link", { name: new RegExp(who) }), page.getByRole("button", { name: new RegExp(who) }), page.getByRole("row", { name: new RegExp(who) })], 8000);
+  if (!row) throw new Error(`inspect_dock: no encontré el hilo "${who}"`);
+  await row.click();
+  await page.waitForTimeout(6000);
+  await dumpScreen(page, `${outBase}-3-hilo`);
+  log("inspect_dock: listo (no se escribió nada)");
+}
