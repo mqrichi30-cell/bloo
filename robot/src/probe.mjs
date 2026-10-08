@@ -7,7 +7,6 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { firstVisible, go } from "./facebook.mjs";
 import { log } from "./util.mjs";
-import { closePinModal } from "./inbox.mjs";
 
 const OPEN_RE = /^(Promocionar( publicaci[oó]n| anuncio)?|Impulsar publicaci[oó]n|Boost( listing| post)?)$/i;
 // Tarjetas: nunca volcar números de tarjeta (solo podrían aparecer los 4 finales, se tapan igual).
@@ -135,11 +134,15 @@ export async function inspectInbox(page, url, outBase) {
   await go(page, url || "https://www.facebook.com/messages/");
   await page.waitForTimeout(6000);
   await dumpScreen(page, `${outBase}-0-inicio`);
-  await closePinModal(page);
-  await dumpScreen(page, `${outBase}-0b-sin-modal`);
-  const folder = await firstVisible([page.getByRole("button", { name: /^Marketplace/ }), page.locator('[role="button"]').filter({ hasText: /^Marketplace/ })], 10_000);
-  if (!folder) throw new Error("inspect_inbox: no encontré la carpeta Marketplace");
-  await folder.click();
+  // El modal de PIN tapa la página (y la deja aria-hidden): NO se cierra ni se escribe nada.
+  // La carpeta se abre con un click de DOM sobre el botón (no atraviesa la capa del modal).
+  const ok = await page.evaluate(() => {
+    const b = [...document.querySelectorAll('[role="button"]')].find((el) => /^Marketplace/.test((el.textContent || "").trim()));
+    if (!b) return false;
+    /** @type {HTMLElement} */ (b).click();
+    return true;
+  });
+  if (!ok) throw new Error("inspect_inbox: no encontré la carpeta Marketplace");
   await page.waitForTimeout(6000);
   await dumpScreen(page, `${outBase}-1-carpeta`);
   const rows = await page.evaluate(() =>
