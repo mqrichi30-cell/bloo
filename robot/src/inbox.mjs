@@ -6,7 +6,8 @@
 // de extremo a extremo), que tapa el compositor y cuyas salidas cambian el estado de cifrado del
 // dispositivo. Los hilos de Marketplace son /messages/t/<id> (sin E2EE): su historial está completo.
 //
-// Regla stateless (sin base de datos), por hilo cuyo artículo empieza EXACTO con "Lentes de sol bloo"
+// Regla stateless (sin base de datos), por hilo cuyo artículo empieza con "Lentes de sol bloo" (sin importar
+// mayúsculas: incluye las publicaciones manuales viejas "Lentes de sol Bloo", decisión de Cris 2026-10-08)
 // (mayúsculas incluidas: los manuales "Lentes de sol Bloo" del dueño no se tocan):
 //   - vista previa "Tú: …"                          → ya respondido, ni se abre (no se marca leído)
 //   - se abre: algún mensaje "por Tú"               → ya respondido, no se toca
@@ -48,7 +49,7 @@ export function parseRow(label, text) {
   if (preview.startsWith(full)) preview = preview.slice(full.length).trim();
   const unread = /^Mensaje no le[ií]do:|mensajes? nuevos?/i.test(preview);
   preview = preview.replace(/^Mensaje no le[ií]do:\s*/i, "");
-  return { label: full, name, title, preview, unread, isBloo: title.startsWith(BLOO_PREFIX), sellerLast: /^(Tú|You):/.test(preview) };
+  return { label: full, name, title, preview, unread, isBloo: title.toLowerCase().startsWith(BLOO_PREFIX.toLowerCase()), sellerLast: /^(Tú|You):/.test(preview) };
 }
 
 /**
