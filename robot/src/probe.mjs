@@ -44,6 +44,14 @@ export async function inspectBoost(page, url, outBase) {
   log("inspect: listo (no se pulsó Publicar)");
 }
 
+/** Formulario de crear publicación (sin llenar ni publicar nada). @param {import('playwright').Page} page @param {string} outBase */
+export async function inspectCreate(page, outBase) {
+  await go(page, "https://www.facebook.com/marketplace/create/item");
+  await page.waitForTimeout(8000);
+  await dumpScreen(page, `${outBase}-create`);
+  log("inspect_create: listo (no se publicó nada)");
+}
+
 /** @param {import('playwright').Page} p @param {string} outBase */
 async function dumpScreen(p, outBase) {
   const dump = await p.evaluate(() => {

@@ -16,7 +16,7 @@ import { CheckpointError, NeedsHumanError } from "./src/checkpoint.mjs";
 import { downloadImages } from "./src/images.mjs";
 import { runTask } from "./src/runner.mjs";
 import { promocionar } from "./src/boost.mjs";
-import { inspectBoost } from "./src/probe.mjs";
+import { inspectBoost, inspectCreate } from "./src/probe.mjs";
 import { log, safeUrl, shortError } from "./src/util.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -65,13 +65,15 @@ async function saveEvidence(page, taskId, error) {
 async function probe() {
   const url = process.env.ROBOT_BOOST_PROBE_URL || "";
   const mode = process.env.ROBOT_BOOST_PROBE_MODE || "inspect";
-  if (!/^https:\/\/www\.facebook\.com\/marketplace\/item\/\d+\/?$/.test(url)) throw new Error("boost_probe_url inválida");
+  if (mode !== "inspect_create" && !/^https:\/\/www\.facebook\.com\/marketplace\/item\/\d+\/?$/.test(url)) throw new Error("boost_probe_url inválida");
   const session = await launch({ headless: true, storageState: loadStorageState() });
   try {
     const page = await session.context.newPage();
     await mkdir(ARTIFACTS, { recursive: true });
     const outBase = path.join(ARTIFACTS, `${new Date().toISOString().replace(/[:.]/g, "-")}-probe`);
-    if (mode === "inspect") {
+    if (mode === "inspect_create") {
+      await inspectCreate(page, outBase);
+    } else if (mode === "inspect") {
       await inspectBoost(page, url, outBase);
     } else if (mode === "dry" || mode === "on") {
       const r = await promocionar(page, url, { mode, amountCrc: 500 }, { onEvidence: (p, note) => saveEvidence(p, "probe", note), deadline: DEADLINE });
