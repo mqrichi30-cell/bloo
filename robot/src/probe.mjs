@@ -106,6 +106,7 @@ async function dumpScreen(p, outBase) {
         el.getAttribute("aria-disabled") === "true" && "disabled",
         /** @type {any} */ (el).type && `type=${/** @type {any} */ (el).type}`,
         /** @type {any} */ (el).value && `value=${String(/** @type {any} */ (el).value).slice(0, 30)}`,
+        el.tagName === "A" && `href=${(el.getAttribute("href") || "").split("?")[0].slice(0, 80)}`,
       ].filter(Boolean).join(" ");
       rows.push(`${role} | ${name} | ${extra} | y=${Math.round(r.top + window.scrollY)}`);
     }
