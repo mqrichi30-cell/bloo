@@ -123,3 +123,29 @@ export async function inspectUrl(page, url, outBase) {
   await dumpScreen(page, `${outBase}-url`);
   log("inspect_url: listo (solo lectura)");
 }
+
+/**
+ * Carpeta "Marketplace" de Messenger (solo lectura): cierra el modal de PIN SIN escribir nada,
+ * abre la carpeta y vuelca filas (texto + href). @param {import('playwright').Page} page @param {string} url @param {string} outBase
+ */
+export async function inspectInbox(page, url, outBase) {
+  if (url && !url.startsWith("https://www.facebook.com/messages/")) throw new Error("inspect_inbox: solo facebook.com/messages/");
+  await go(page, url || "https://www.facebook.com/messages/");
+  await page.waitForTimeout(6000);
+  await dumpScreen(page, `${outBase}-0-inicio`);
+  for (let i = 0; i < 2; i++) await page.keyboard.press("Escape").catch(() => {});
+  await page.waitForTimeout(1500);
+  const folder = await firstVisible([page.getByRole("button", { name: /^Marketplace/ })], 10_000);
+  if (!folder) throw new Error("inspect_inbox: no encontré la carpeta Marketplace");
+  await folder.click();
+  await page.waitForTimeout(6000);
+  await dumpScreen(page, `${outBase}-1-carpeta`);
+  const rows = await page.evaluate(() =>
+    [...document.querySelectorAll('a[href*="/messages/"]')].map((a) => {
+      const r = a.getBoundingClientRect();
+      return `${(a.getAttribute("href") || "").replace(/\d{6,}/g, (m) => "id" + m.slice(-4))} | ${(a.getAttribute("aria-label") || "")} | ${(a.textContent || "").replace(/\s+/g, " ").slice(0, 160)} | x=${Math.round(r.left)} y=${Math.round(r.top)} w=${Math.round(r.width)}`;
+    })
+  );
+  await writeFile(`${outBase}-2-filas.txt`, rows.join("\n"));
+  log(`inspect_inbox: ${rows.length} enlaces de hilos (solo lectura)`);
+}
