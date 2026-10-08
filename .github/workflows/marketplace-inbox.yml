@@ -1,0 +1,143 @@
+# Inbox de Marketplace (robot/src/inbox.mjs): respuesta automática ÚNICA a compradores de
+# "Lentes de sol bloo" en el Messenger PERSONAL del dueño. Stateless: si el hilo ya tiene cualquier
+# mensaje del vendedor, no se toca. Máx. 10 respuestas por corrida. Nunca escribe el PIN de chats cifrados.
+# Secrets: FB_STORAGE_STATE_B64 (sesión), CRON_SECRET (solo para leer si el robot está en pausa). Nunca se imprimen.
+#
+# Presupuesto de Actions (repo privado, 2.000 min/mes compartidos con marketplace-robot e imagegen):
+#   - Cada corrida abre Chrome (no hay compuerta barata: sin abrir Facebook no se sabe si hay mensajes nuevos).
+#     Sin hilos por responder ≈ 60-80 s → 1-2 min facturados (GitHub redondea cada job al minuto).
+#   - Horario: cada hora de 7:00 a 21:00 hora CR (UTC-6) = 15 corridas/día.
+#     15 × 30 × ~1,5 min ≈ 675 min/mes (peor caso 15 × 30 × 2 = 900).
+#   - marketplace-robot ociosa ≈ 24 × 30 × 1 = 720 min/mes; imagegen ociosa ≈ 4 × 30 × 1 = 120 min/mes.
+#     Total ocioso ≈ 1.515 min/mes (peor caso 1.740): queda poco margen para días con fotos IA.
+#     Si se queda corto: pasar este cron a cada 2 h ("47 1,3,13-23/2 * * *" ≈ 360 min/mes).
+name: marketplace-inbox
+
+on:
+  schedule:
+    # Minuto :47 (el robot usa :17). UTC 13-23 y 0-3 = 7:00-21:00 en Costa Rica.
+    - cron: "47 0-3,13-23 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry-run: solo lista (log + captura) qué hilos respondería; NO envía nada"
+        type: boolean
+        default: true
+      max_replies:
+        description: "Tope de respuestas en esta corrida (0-10)"
+        type: string
+        default: "10"
+
+permissions:
+  contents: read
+  actions: write # solo para auto-pausar este workflow si Facebook pide humano
+
+# Mismo grupo que marketplace-robot: nunca dos sesiones de Facebook a la vez. Si ambos quedan en cola,
+# GitHub conserva solo el último pendiente (el otro se cancela; el siguiente cron lo retoma).
+concurrency:
+  group: marketplace-robot
+  cancel-in-progress: false
+
+jobs:
+  inbox:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      BLOO_URL: https://bloo-panel.netlify.app
+    steps:
+      # Si el robot quedó en pausa en el panel (p. ej. checkpoint en otra corrida), no abrir Facebook.
+      - name: Check robot pause
+        id: gate
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          code=$(curl -sS --max-time 20 -o body.json -w '%{http_code}' \
+            -H "x-cron-secret: ${CRON_SECRET}" "${BLOO_URL}/api/robot/pending-count" || echo 000)
+          paused=false
+          if [ "$code" = "200" ]; then paused=$(jq -r '.paused // false' body.json); fi
+          rm -f body.json
+          echo "panel HTTP ${code} paused=${paused}"
+          if [ "$paused" = "true" ]; then echo "run=false" >> "$GITHUB_OUTPUT"; else echo "run=true" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Checkout
+        if: steps.gate.outputs.run == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: robot
+          persist-credentials: false
+
+      - name: Set up Node
+        if: steps.gate.outputs.run == 'true'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: robot/package-lock.json
+
+      - name: Install deps
+        if: steps.gate.outputs.run == 'true'
+        working-directory: robot
+        run: npm ci --no-audit --no-fund
+
+      # El runner trae Google Chrome (regla del dueño): ~/.cache/ms-playwright solo existe si hay que
+      # bajar Chromium de respaldo; por eso el cache va condicionado (antes daba "Path Validation Error").
+      - name: Detect Chrome
+        if: steps.gate.outputs.run == 'true'
+        id: chrome
+        run: |
+          if command -v google-chrome >/dev/null 2>&1; then
+            echo "Google Chrome: $(google-chrome --version)"; echo "has=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Cache Playwright browsers
+        if: steps.gate.outputs.run == 'true' && steps.chrome.outputs.has != 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: ms-playwright-${{ runner.os }}-${{ hashFiles('robot/package-lock.json') }}
+
+      - name: Install Chromium fallback
+        if: steps.gate.outputs.run == 'true' && steps.chrome.outputs.has != 'true'
+        working-directory: robot
+        run: npx playwright install --with-deps chromium
+
+      - name: Run inbox
+        id: run
+        if: steps.gate.outputs.run == 'true'
+        working-directory: robot
+        env:
+          FB_STORAGE_STATE_B64: ${{ secrets.FB_STORAGE_STATE_B64 }}
+          # Cron = real; manual = lo que diga dry_run (por defecto true).
+          ROBOT_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run == true && 'true' || 'false' }}
+          INBOX_MAX_REPLIES: ${{ inputs.max_replies || '10' }}
+          ROBOT_BUDGET_MS: "330000"
+        run: |
+          set +e
+          node run.mjs --inbox
+          code=$?
+          echo "code=${code}" >> "$GITHUB_OUTPUT"
+          exit $code
+
+      # Checkpoint / login / 2FA: no reintentar cada hora. Se desactiva este workflow (el job falla →
+      # GitHub avisa por correo). Reactivar en Actions → marketplace-inbox → Enable, tras renovar la sesión.
+      - name: Pause inbox (Facebook pide humano)
+        if: failure() && steps.run.outputs.code == '3'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow disable marketplace-inbox.yml -R "${GITHUB_REPOSITORY}"
+          echo "::error::Facebook pidió intervención humana: marketplace-inbox quedó DESACTIVADO. Ver captura en artifacts."
+
+      # Solo PNG + resumen .txt (nombres de compradores enmascarados). Nunca storageState ni HTML.
+      - name: Upload evidence
+        if: always() && steps.gate.outputs.run == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: inbox-evidence-${{ github.run_id }}
+          path: |
+            robot/artifacts/*.png
+            robot/artifacts/*.txt
+          retention-days: 7
+          if-no-files-found: ignore

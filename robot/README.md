@@ -56,3 +56,24 @@ Pruebas offline (stub local, no toca Facebook): `npm test` (cubre 2 fotos en ord
 encontrada/no encontrada/ambigua, pauta dry, mínimo ≠ ₡500, cuenta en USD, pantalla de tarjeta y pago
 idempotente). Los textos de la pauta están armados sin sesión real: la primera corrida con
 `ROBOT_BOOST_MODE=dry` en el panel sirve para confirmarlos con la captura.
+
+## 4. Inbox: respuesta única a compradores (`marketplace-inbox.yml`)
+
+Facebook no ofrece respuesta automática de Marketplace en la cuenta personal, así que `node run.mjs --inbox`
+(cada hora de 7:00 a 21:00 CR, minuto :47) abre **Tus publicaciones → botón Messenger → carpeta Marketplace**
+(chat acoplado; `/messages/` no sirve porque ahí sale el modal "Ingresa tu PIN" de chats cifrados, que el robot
+nunca toca) y, para cada hilo cuyo artículo empieza **exacto** con `Lentes de sol bloo` (los manuales
+"Lentes de sol Bloo" no se tocan):
+
+- vista previa "Tú: …" o cualquier mensaje "por Tú" en el hilo → ya respondido, no se toca;
+- sin "X inició este chat" visible (historial incompleto) → no se toca;
+- si no → envía **una vez** el texto fijo (`REPLY_TEXT` en `src/inbox.mjs`) y verifica que aparece 1 sola vez;
+  si aparece 0 o 2+ veces, la corrida se detiene.
+
+Stateless: la próxima corrida ve el mensaje del vendedor y no repite. Máx. 10 por corrida, pausas de 8–20 s.
+Si abrió un hilo no leído y no respondió, lo vuelve a marcar "no leído". Checkpoint/login/2FA → no envía,
+deja captura y **desactiva el workflow** (reactivar en Actions tras renovar la sesión). Si el panel tiene el
+robot en pausa, el inbox tampoco corre.
+
+Probar: Actions → **marketplace-inbox** → Run workflow (dry_run viene marcado): lista en el log y en
+`*-inbox-resumen.txt` qué hilos respondería, con captura de cada uno. Offline: `npm test` (`test/inbox.test.mjs`).

@@ -96,24 +96,29 @@ jobs:
         working-directory: robot
         run: npm ci --no-audit --no-fund
 
-      - name: Cache Playwright browsers
+      # Regla del dueño: Google Chrome real (el runner ya lo trae). ~/.cache/ms-playwright solo existe si
+      # hay que bajar Chromium de respaldo: el cache va condicionado (antes daba "Path Validation Error").
+      - name: Detect Chrome
         if: steps.pending.outputs.run == 'true'
+        id: chrome
+        run: |
+          if command -v google-chrome >/dev/null 2>&1; then
+            echo "Google Chrome: $(google-chrome --version)"; echo "has=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Cache Playwright browsers
+        if: steps.pending.outputs.run == 'true' && steps.chrome.outputs.has != 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
           key: ms-playwright-${{ runner.os }}-${{ hashFiles('robot/package-lock.json') }}
 
-      # Regla del dueño: Google Chrome real (el runner ya lo trae). Chromium solo de respaldo.
-      - name: Ensure browser
-        if: steps.pending.outputs.run == 'true'
+      - name: Install Chromium fallback
+        if: steps.pending.outputs.run == 'true' && steps.chrome.outputs.has != 'true'
         working-directory: robot
-        run: |
-          if command -v google-chrome >/dev/null 2>&1; then
-            echo "Google Chrome: $(google-chrome --version)"
-          else
-            echo "Google Chrome no está: instalo Chromium de Playwright como respaldo"
-            npx playwright install --with-deps chromium
-          fi
+        run: npx playwright install --with-deps chromium
 
       - name: Run robot (one task)
         if: steps.pending.outputs.run == 'true'

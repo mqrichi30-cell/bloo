@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<style>.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)} .chat{border:1px solid #ccc;width:340px} .msgs{max-height:160px;overflow-y:auto}</style>
+</head>
+<body>
+<!-- Stub del Messenger acoplado de Facebook (es-CR). window.STATE lo inyecta el servidor de pruebas. -->
+<div role="banner"><div role="button" tabindex="0" aria-label="Messenger" id="mbtn">M</div></div>
+<h1>Tus publicaciones</h1>
+<div id="dd" hidden>
+  <div role="button" tabindex="0" id="folder">Marketplace<span>1 mensaje nuevo · 19 h</span></div>
+  <div><span>Ingresa tu PIN para restaurar los chats</span><input aria-label="PIN" id="pin" type="text"></div>
+</div>
+<div id="fold" hidden>
+  <div role="button" tabindex="0" aria-label="Volver" id="back">←</div>
+  <div id="rows" style="max-height:400px;overflow-y:auto"></div>
+</div>
+<div id="chats"></div>
+<script>
+const S = window.STATE;
+const post = (u, b) => fetch(u, { method: "POST", body: b || "" });
+const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
+const lbl = (t) => `${t.name} · ${t.title}`;
+mbtn.onclick = () => { const open = !dd.hidden || !fold.hidden; dd.hidden = open; fold.hidden = true; };
+folder.onclick = () => { dd.hidden = true; fold.hidden = false; renderRows(); };
+back.onclick = () => { fold.hidden = true; dd.hidden = false; };
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") { dd.hidden = true; fold.hidden = true; document.querySelectorAll('[role=menu]').forEach((m) => m.remove()); } });
+function preview(t) {
+  const m = t.msgs[t.msgs.length - 1];
+  return (t.unread ? "Mensaje no leído:" : "") + (m ? (m.from === "Tú" ? "Tú: " : "") + m.text : "");
+}
+function renderRows() {
+  rows.innerHTML = S.threads.map((t) =>
+    `<div class="row"><a href="/messages/t/${t.id}/" aria-label="Chat en grupo: ${esc(lbl(t))}" data-id="${t.id}"><span>${esc(lbl(t))}</span><span>${esc(preview(t))} · 2 h</span></a>` +
+    `<div role="button" tabindex="0" aria-label="Más opciones para ${esc(lbl(t))}" data-more="${t.id}">…</div></div>`).join("");
+  rows.querySelectorAll("a").forEach((a) => (a.onclick = (e) => { e.preventDefault(); openChat(a.dataset.id); }));
+  rows.querySelectorAll("[data-more]").forEach((b) => (b.onclick = () => {
+    const menu = document.createElement("div");
+    menu.setAttribute("role", "menu");
+    menu.innerHTML = `<div role="menuitem" tabindex="0">Marcar como no leído</div>`;
+    menu.firstChild.onclick = () => { const t = S.threads.find((x) => x.id === b.dataset.more); t.unread = true; post(`/__unread/${t.id}`); menu.remove(); };
+    b.after(menu);
+  }));
+}
+const msgHtml = (from, text) => `<div>${esc(text)}</div><span class="sr">Presionar Enter, Mensaje enviado miércoles 19:52 por ${esc(from)}: ${esc(text)}</span>`;
+function openChat(id) {
+  const t = S.threads.find((x) => x.id === id);
+  t.unread = false;
+  post(`/__open/${id}`);
+  fold.hidden = true;
+  const c = document.createElement("div");
+  c.className = "chat";
+  c.innerHTML = `<div>${esc(lbl(t))}</div><div role="button" tabindex="0" aria-label="Cerrar chat" class="x">x</div>` +
+    `<div class="msgs">${t.started ? `<span>${esc(t.name)} inició este chat.</span>` + msgHtml(t.name, `${t.name} inició este chat.`) : ""}` +
+    t.msgs.map((m) => msgHtml(m.from, m.text)).join("") + `</div>` +
+    `<div class="composer"><div class="ph">Escribe en ${esc(lbl(t))}</div><div contenteditable="true" role="textbox" aria-label="Escribir mensaje" style="min-height:20px"></div></div>`;
+  chats.appendChild(c);
+  c.querySelector(".x").onclick = () => c.remove();
+  const box = c.querySelector("[role=textbox]");
+  box.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    const text = box.innerText.trim();
+    if (!text) return;
+    const times = S.doubleSend ? 2 : 1;
+    for (let i = 0; i < times; i++) {
+      t.msgs.push({ from: "Tú", text });
+      c.querySelector(".msgs").insertAdjacentHTML("beforeend", msgHtml("Tú", text));
+      post(`/__send/${id}`, text);
+    }
+    box.textContent = "";
+  });
+}
+</script>
+</body>
+</html>

@@ -6,6 +6,9 @@
 // Acciones: publicar | quitar | reemplazar (quita la vieja por oldTitle exacto y publica la nueva).
 // Pauta (task.boost) tras publicar/reemplazar: ver src/boost.mjs (dry = simula, on = paga ₡500 verificado).
 // Env: BLOO_URL, CRON_SECRET, FB_STORAGE_STATE_B64. Nada de esto se imprime.
+//   node run.mjs --inbox      → respuesta única a compradores de "Lentes de sol bloo" (src/inbox.mjs);
+//                               con --dry-run solo lista qué hilos respondería. También ROBOT_MODE=inbox.
+//                               Salida 3 = Facebook pide humano (checkpoint/login/2FA): el workflow se pausa solo.
 // ROBOT_BUDGET_MS: presupuesto de tiempo de la corrida (default 9,5 min; el job tiene timeout 12).
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -17,6 +20,7 @@ import { downloadImages } from "./src/images.mjs";
 import { runTask } from "./src/runner.mjs";
 import { promocionar } from "./src/boost.mjs";
 import { inspectBoost, inspectCreate, inspectDock, inspectEdit, inspectInbox, inspectUrl, setDescription } from "./src/probe.mjs";
+import { runInbox } from "./src/inbox.mjs";
 import { log, safeUrl, shortError } from "./src/util.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -97,7 +101,53 @@ async function probe() {
   }
 }
 
+/** Inbox de Marketplace (sin tarea del servidor). 0 = ok, 3 = necesita humano, 1 = error. */
+async function inbox() {
+  const max = Number(process.env.INBOX_MAX_REPLIES);
+  const session = await launch({ headless: true, storageState: loadStorageState() });
+  /** @type {import('playwright').Page|null} */
+  let page = null;
+  try {
+    page = await session.context.newPage();
+    const r = await runInbox(page, {
+      dryRun,
+      maxReplies: Number.isInteger(max) && max >= 0 && max <= 10 ? max : 10,
+      deadline: DEADLINE,
+      onEvidence: (p, note) => saveEvidence(p, dryRun ? "inbox-dry" : "inbox", note),
+    });
+    await mkdir(ARTIFACTS, { recursive: true });
+    const lines = r.outcomes.map((o) => `${o.who} · ${o.title} → ${o.result}: ${o.reason}`);
+    await writeFile(
+      path.join(ARTIFACTS, `${new Date().toISOString().replace(/[:.]/g, "-")}-inbox-resumen.txt`),
+      [`modo: ${dryRun ? "dry" : "real"}`, `conversaciones Marketplace: ${r.rows}`, `de bloo: ${r.bloo}`,
+        `a responder: ${r.planned}`, `enviadas: ${r.sent}`, "", ...lines, ""].join("\n")
+    );
+    log(`inbox: listo. bloo=${r.bloo} a_responder=${r.planned} enviadas=${r.sent}${dryRun ? " (dry)" : ""}`);
+    return 0;
+  } catch (e) {
+    const msg = shortError(e);
+    await saveEvidence(page, "inbox", msg);
+    if (e instanceof NeedsHumanError) {
+      log(`inbox: necesita humano, no se envió nada más: ${msg}`);
+      return 3;
+    }
+    log(`inbox falló: ${msg}`);
+    return 1;
+  } finally {
+    await session.browser.close().catch(() => {});
+  }
+}
+
 async function main() {
+  if (argv.has("--inbox") || process.env.ROBOT_MODE === "inbox") {
+    try {
+      return await inbox();
+    } catch (e) {
+      // loadStorageState / launch: sesión inválida = humano.
+      log(`inbox: ${shortError(e)}`);
+      return e instanceof NeedsHumanError ? 3 : 1;
+    }
+  }
   if (process.env.ROBOT_BOOST_PROBE_URL) return probe();
   const baseUrl = process.env.BLOO_URL || "https://bloo-panel.netlify.app";
   const secret = process.env.CRON_SECRET || "";
