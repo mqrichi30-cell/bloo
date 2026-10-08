@@ -67,8 +67,16 @@ export async function setDescription(page, url, text, evidence) {
   if (!text.trim()) throw new Error("set_description: texto vacío");
   await go(page, `https://www.facebook.com/marketplace/edit/?listing_id=${id}`);
   await page.waitForTimeout(6000);
-  const area = page.locator("textarea").filter({ hasText: /Lentes de sol bloo/ }).first();
-  if (!(await area.isVisible().catch(() => false))) throw new Error("set_description: no encontré la descripción actual");
+  // La descripción es el textarea cuyo VALOR empieza con el título de bloo (React no lo pone en textContent).
+  const all = page.locator("textarea");
+  let area = null;
+  for (let i = 0, n = await all.count(); i < n; i++) {
+    if ((await all.nth(i).inputValue().catch(() => "")).startsWith("Lentes de sol bloo")) {
+      area = all.nth(i);
+      break;
+    }
+  }
+  if (!area) throw new Error("set_description: no encontré la descripción actual");
   await area.click();
   await area.fill(text);
   await page.waitForTimeout(1500);
