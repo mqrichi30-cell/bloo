@@ -133,8 +133,12 @@ export async function inspectInbox(page, url, outBase) {
   await go(page, url || "https://www.facebook.com/messages/");
   await page.waitForTimeout(6000);
   await dumpScreen(page, `${outBase}-0-inicio`);
-  for (let i = 0; i < 2; i++) await page.keyboard.press("Escape").catch(() => {});
-  await page.waitForTimeout(1500);
+  // Modal "Ingresa tu PIN para restaurar los chats": se cierra con su X; NUNCA se escribe el PIN.
+  const close = await firstVisible([page.getByRole("dialog").getByRole("button", { name: /^Cerrar$/ }), page.getByRole("button", { name: /^Cerrar$/ })], 4000);
+  if (close) {
+    await close.click();
+    await page.waitForTimeout(2000);
+  }
   const folder = await firstVisible([page.getByRole("button", { name: /^Marketplace/ })], 10_000);
   if (!folder) throw new Error("inspect_inbox: no encontré la carpeta Marketplace");
   await folder.click();
