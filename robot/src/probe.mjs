@@ -114,3 +114,12 @@ async function dumpScreen(p, outBase) {
   await p.screenshot({ path: `${outBase}-inspect.png`, fullPage: true, timeout: 20_000 }).catch(() => {});
   log(`inspect: ${dump.rows.length} controles volcados (${path.basename(outBase)})`);
 }
+
+/** Vuelca cualquier página de Facebook / Business Suite (solo lectura). @param {import('playwright').Page} page @param {string} url @param {string} outBase */
+export async function inspectUrl(page, url, outBase) {
+  if (!/^https:\/\/(www|business)\.facebook\.com\//.test(url)) throw new Error("inspect_url: solo facebook.com / business.facebook.com");
+  await go(page, url);
+  await page.waitForTimeout(10_000);
+  await dumpScreen(page, `${outBase}-url`);
+  log("inspect_url: listo (solo lectura)");
+}
