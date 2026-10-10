@@ -77,7 +77,7 @@ def finish(cut: Image.Image, render: Image.Image) -> tuple[dict[str, Image.Image
                             "stats": {k: v for k, v in rep.stats.items() if k not in ("wm", "hand")}}
     final = render
     if ok and rep.fit is not None:
-        final = restore_product(render, ref, rep.homography if rep.homography is not None else rep.fit, alpha)
+        final = restore_product(render, ref, rep.homography if rep.homography is not None else rep.fit, alpha, lenses=False)
         info["restored"] = True
     return to_outputs(final, alpha, OUTPUT_SIZES), info
 

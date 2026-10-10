@@ -1,7 +1,10 @@
 """Entry point: `python -m imagegen.run [--once] [--max-jobs N --max-minutes M] | --next-wait |
---dry-run --source <file|url> [--plate file] [--cutout file.png] [--edit-image f | --edit | --gpt] [--review]`.
+--dry-run --source <file|url> [--plate file] [--cutout file.png] [--edit-image f | --edit | --gpt] [--review]
+[--variant story]`.
 
 Hero jobs: one paid GPT Image call (gpt_scene), then cfedit (free) if the render has a hard defect.
+Story jobs (variant 'story', 1080x1920 ad): same scene + pair, one paid GPT call at 1024x1536
+(gpt_story), cfedit 1024x1536 as the free fallback; story.py does the 9:16 framing and safe zones.
 
 Exit codes (scheduler friendly): 0 = pass finished normally, including "nothing pending" and
 "all providers exhausted, retry later"; 2 = configuration missing; 1 = unexpected crash.
@@ -35,7 +38,10 @@ from .qa import run_qa
 from .reflection import duplicate_check, remove_reflection
 from .review import VisionReviewer
 from .storage import Storage
-from .util import VARIANTS, compact_ts, env, log, mem_info, now_ts, setup_logging
+from .story import (STORY_CF_REF, STORY_GEN_SIZE, STORY_LOGO_BOTTOM_FRAC, STORY_SIZE, StoryLayout,
+                    build_story_reference, compose_story, place_story_product, plan_story, product_bbox,
+                    story_zones_preview)
+from .util import STORY, VARIANTS, compact_ts, env, log, mem_info, now_ts, setup_logging
 
 BUCKET = "bloo-marketing"
 PROVIDER_STATE = "state/providers.json"
@@ -145,7 +151,7 @@ def edit_scene(cut: Image.Image, variant: str, editor: CloudflareEdit | None,
         if not att["ok"] or rep.fit is None:
             defects, hint = [str(att["reason"] or "fidelity gate")], ""
             continue
-        final = restore_product(img, ref, rep.homography if rep.homography is not None else rep.fit, alpha) if RESTORE else img
+        final = restore_product(img, ref, rep.homography if rep.homography is not None else rep.fit, alpha, stats=att) if RESTORE else img
         outs = to_outputs(final, alpha, OUTPUT_SIZES)
         try:  # AI reviewer last: the only check that costs neurons
             verdict = reviewer.review(ref.image, outs["1x1"], variant)
@@ -187,8 +193,8 @@ def gpt_usable(gpt: OpenAIEdit | None, variant: str, image_id: str | None, revie
     """'' when the paid GPT route may run for this job, else why it is skipped."""
     if gpt is None or not gpt.configured():
         return "not configured"
-    if variant != "hero":
-        return "hero only"
+    if variant not in ("hero", STORY):
+        return "hero/story only"
     if not gpt.available():
         return "daily cap reached or provider benched"
     if gpt.already_paid(image_id):
@@ -235,7 +241,7 @@ def gpt_scene(cut: Image.Image, gpt: OpenAIEdit, reviewer: VisionReviewer,
         log.info("gptimage render REJECTED (hard: %s); no paid retry", hard)
         return None, meta
     warnings = [rep.reason] if rep.reason else []
-    final = restore_product(img, ref, rep.homography if rep.homography is not None else rep.fit, alpha) if RESTORE else img
+    final = restore_product(img, ref, rep.homography if rep.homography is not None else rep.fit, alpha, stats=meta) if RESTORE else img
     outs = to_outputs(final, alpha, OUTPUT_SIZES)
     try:
         verdict = reviewer.review(ref.image, outs["1x1"], "hero")
@@ -255,6 +261,185 @@ def gpt_scene(cut: Image.Image, gpt: OpenAIEdit, reviewer: VisionReviewer,
     return outs, meta
 
 
+# ------------------------------------------------------------------ Story (9:16 ad)
+def story_frame(img: Image.Image, ref: Any, alpha: Any,
+                gpt_rules: bool) -> tuple[Image.Image | None, dict[str, Any], str]:
+    """Free local checks of a 2:3 Story render, then the 9:16 framing: duplicate/reflection check,
+    fidelity gate (same thresholds as the hero), safe-zone layout, real-pixel restore, compose.
+    Returns (1080x1920 frame without logo | None, info, rejection reason)."""
+    info: dict[str, Any] = {}
+    dup_ok, dup_reason, dup_stats = duplicate_check(img, alpha)
+    info["dup"] = dup_stats
+    if not dup_ok:
+        return None, info, dup_reason
+    rep = fidelity_gate(ref, img, alpha, RESTORE)
+    info["gate"] = {k: v for k, v in rep.stats.items() if k not in ("wm", "hand")}
+    if not rep.ok:
+        hard = gpt_hard_defects(rep.reason) if gpt_rules else [rep.reason or "fidelity gate"]
+        if hard:
+            return None, info, hard[0]
+        info["warnings"] = [rep.reason]
+    if rep.fit is None:
+        return None, info, "fidelity gate: no fit"
+    bbox = product_bbox(alpha)
+    lay = plan_story(img.size, bbox) if bbox else StoryLayout(False, "no product in render")
+    info["layout"] = lay.as_dict()
+    if not lay.ok:
+        return None, info, lay.reason
+    final = restore_product(img, ref, rep.homography if rep.homography is not None else rep.fit, alpha, stats=info) if RESTORE else img
+    return compose_story(final, lay), info, ""
+
+
+def gpt_story(cut: Image.Image, gpt: OpenAIEdit, reviewer: VisionReviewer,
+              image_id: str | None = None) -> tuple[Image.Image | None, dict[str, Any]]:
+    """Paid Story route: ONE GPT Image call at 1024x1536 (hero prompt + vertical framing, vertical
+    input with the product pre-placed), then story_frame and the AI review of the final 9:16 frame.
+    Never called twice: a hard defect returns (None, meta) and the caller falls back to cfedit."""
+    meta: dict[str, Any] = {"provider": gpt.label, "model": gpt.model,
+                            "size": f"{STORY_GEN_SIZE[0]}x{STORY_GEN_SIZE[1]}"}
+    ref = build_reference(cut)
+    try:
+        img, call = gpt.edit(EDIT_PROMPTS[STORY], build_story_reference(cut, STORY_GEN_SIZE), image_id,
+                             size=STORY_GEN_SIZE)
+    except QuotaExhausted as e:
+        gpt.mark_exhausted(e.reset_at, str(e))
+        meta.update(rejected=True, why=f"quota: {str(e)[:160]}")
+        return None, meta
+    except (ProviderError, requests.RequestException, ValueError, OSError) as e:
+        meta.update(rejected=True, why=f"api: {str(e)[:200]}")
+        log.warning("gptimage story failed: %s", str(e)[:300])
+        return None, meta
+    meta["cost"] = call
+    alpha = segment_alpha(img)
+    story, info, why = story_frame(img, ref, alpha, gpt_rules=True)
+    meta.update(info)
+    if story is None:
+        meta.update(rejected=True, hard=[why], why=why)
+        log.info("gptimage story REJECTED (%s); no paid retry", why)
+        return None, meta
+    warnings = list(info.get("warnings", []))
+    try:
+        verdict = reviewer.review(ref.image, story, STORY)
+    except (QuotaExhausted, ProviderError) as e:  # cannot certify -> never 'lista' unreviewed
+        meta.update(rejected=True, hard=["ai review unavailable"], why=f"review: {str(e)[:160]}")
+        return None, meta
+    meta["aiReview"] = verdict
+    defects = [str(d) for d in verdict.get("defects") or []]
+    hard = gpt_hard_defects("", defects)
+    warnings += [d for d in defects if d not in hard and not d.startswith("model: ")]
+    if hard:
+        meta.update(rejected=True, hard=hard, why="ai review: " + ", ".join(hard))
+        log.info("gptimage story REJECTED by AI review (%s); no paid retry", hard)
+        return None, meta
+    meta.update(rejected=False, warnings=warnings, restored=RESTORE)
+    log.info("gptimage story ACCEPTED%s", f" (soft warnings: {warnings})" if warnings else "")
+    return story, meta
+
+
+def edit_story(cut: Image.Image, editor: CloudflareEdit | None, reviewer: VisionReviewer | None,
+               tries: int = EDIT_TRIES) -> tuple[Image.Image | None, dict[str, Any]]:
+    """Free Story route (same rules as edit_scene): FLUX.2 at 1024x1536 from the vertical input,
+    up to `tries` attempts with the defects fed back into the prompt; AI review last."""
+    meta: dict[str, Any] = {"path": "edit", "variant": STORY, "attempts": []}
+    if editor is None or not editor.available():
+        meta["skipped"] = "no edit provider available"
+        return None, meta
+    if reviewer is None or not reviewer.configured():
+        meta["skipped"] = "review unavailable: no vision reviewer configured"
+        return None, meta
+    ref = build_reference(cut)
+    sref = build_story_reference(cut, STORY_CF_REF)
+    defects: list[str] = []
+    hint = ""
+    for _ in range(tries):
+        seed = random.randint(1, 2**31 - 1)
+        prompt = correction_prompt(STORY, defects, hint) if defects else EDIT_PROMPTS[STORY]
+        try:
+            img, model = editor.edit(prompt, sref, STORY_GEN_SIZE, seed)
+        except QuotaExhausted as e:
+            editor.mark_exhausted(e.reset_at, str(e))
+            meta["skipped"] = f"quota: {str(e)[:120]}"
+            meta["quota_reset"] = e.reset_at
+            return None, meta
+        except (ProviderError, requests.RequestException, KeyError, ValueError, OSError) as e:
+            log.warning("edit provider failed (story): %s", str(e)[:300])
+            meta["skipped"] = f"provider error: {type(e).__name__}"
+            return None, meta
+        alpha = segment_alpha(img)
+        story, info, why = story_frame(img, ref, alpha, gpt_rules=False)
+        att: dict[str, Any] = {"model": model, "seed": seed, "corrected": bool(defects), "ok": story is not None,
+                               "reason": why, **{k: v for k, v in info.items() if k in ("gate", "layout")}}
+        meta["attempts"].append(att)
+        log.info("story edit %s seed %d -> %s %s", model, seed, "OK" if story is not None else "REJECTED", why)
+        if story is None:
+            defects, hint = [why], ""
+            continue
+        try:
+            verdict = reviewer.review(ref.image, story, STORY)
+        except QuotaExhausted as e:
+            meta["skipped"] = f"quota: review {str(e)[:120]}"
+            meta["quota_reset"] = e.reset_at
+            return None, meta
+        except ProviderError as e:
+            meta["skipped"] = f"review unavailable: {str(e)[:160]}"
+            return None, meta
+        att["aiReview"] = {k: verdict.get(k) for k in ("pass", "defects", "model", "neurons")}
+        meta["aiReview"] = verdict
+        if verdict["pass"]:
+            meta.update(model=model, restored=RESTORE)
+            return story, meta
+        att.update(ok=False, reason=("ai review: " + ", ".join(verdict["defects"]))[:200])
+        defects, hint = list(verdict["defects"]), str(verdict.get("fix_hint") or "")
+    return None, meta
+
+
+def process_story(job: Job, src: Image.Image, cut: Image.Image, local: dict[str, Any], refl: dict[str, Any],
+                  storage: Storage, editor: CloudflareEdit | None, reviewer: VisionReviewer | None,
+                  gpt: OpenAIEdit | None, state: dict[str, Any] | None) -> dict[str, Any]:
+    """Story job: one paid GPT call, then the free cfedit; never the plate composite."""
+    gmeta: dict[str, Any] | None = None
+    skip = gpt_usable(gpt, STORY, job.image_id, reviewer, state)
+    if not skip and gpt is not None and reviewer is not None:
+        story, gmeta = gpt_story(cut, gpt, reviewer, job.image_id)
+        if story is not None:
+            qa = run_qa(src, story)  # optional Gemini QA; the AI review already passed
+            failed = set(qa.get("failed", [])) & GPT_VISION_HARD
+            if not failed:
+                qa.update(local=local, gpt=gmeta, aiReview=gmeta.get("aiReview"), source=refl)
+                return _upload_story(job, story, storage, qa, gpt.label)
+            gmeta.update(rejected=True, hard=sorted(failed), why="vision qa: " + ",".join(sorted(failed)))
+        log.info("gptimage story rejected for %s (%s) -> free cfedit fallback", job.image_id, gmeta.get("why"))
+    elif gpt is not None and gpt.configured():
+        gmeta = {"skipped": skip}
+
+    story, emeta = edit_story(cut, editor, reviewer)
+    emeta["source"] = refl
+    if gmeta is not None:
+        emeta["gpt"] = gmeta
+    if story is not None:
+        qa = run_qa(src, story)
+        qa.update(local=local, edit=emeta, aiReview=emeta.get("aiReview"))
+        if gmeta is not None:
+            qa["gpt"] = gmeta
+        if not set(qa.get("failed", [])) & GPT_VISION_HARD:
+            return _upload_story(job, story, storage, qa, f"cfedit:{emeta['model']}")
+        emeta["vision_failed"] = qa.get("failed")
+        log.info("story edit output failed vision QA (%s)", qa.get("failed"))
+    return _edit_failure(emeta, local)
+
+
+def _upload_story(job: Job, story: Image.Image, storage: Storage, qa: dict[str, Any],
+                  provider: str) -> dict[str, Any]:
+    if story.size != STORY_SIZE:
+        raise ValueError(f"story frame is {story.size}, expected {STORY_SIZE}")
+    path = f"models/{job.model_id}/{STORY}-{compact_ts()}.jpg"
+    # logo after every check, above Meta's bottom 20 % (the AI reviewer would flag it as a logo)
+    storage.upload(path, to_jpeg(stamp_logo(story, STORY_LOGO_BOTTOM_FRAC), JPEG_Q), "image/jpeg")
+    qa["format"] = f"story {STORY_SIZE[0]}x{STORY_SIZE[1]}"
+    return {"estado": "lista", "publicUrl": storage.public_url(path), "storagePath": path,
+            "provider": provider, "qa": qa}
+
+
 def process_job(job: Job, pool: PlatePool, storage: Storage,
                 editor: CloudflareEdit | None = None, reviewer: VisionReviewer | None = None,
                 gpt: OpenAIEdit | None = None, state: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -264,6 +449,8 @@ def process_job(job: Job, pool: PlatePool, storage: Storage,
     if hand.has_hand:
         return _err("source_has_hand", qa={"local": hand.as_dict()})
     cut, refl = clean_cutout(cut)
+    if variant == STORY:
+        return process_story(job, src, cut, hand.as_dict(), refl, storage, editor, reviewer, gpt, state)
 
     gmeta: dict[str, Any] | None = None
     skip = gpt_usable(gpt, variant, job.image_id, reviewer, state)
@@ -408,10 +595,10 @@ def run_worker(max_jobs: int, max_minutes: float, once: bool = False) -> int:
     def servable() -> list[str]:
         edit_ok = editor.available()
         if not edit_ok and gpt.available() and review_available(reviewer, state):
-            return ["hero"]  # free budget spent: only the paid route (hero) can still serve
+            return ["hero", STORY]  # free budget spent: only the paid route (hero/story) can still serve
         if not composite_allowed():
             return list(VARIANTS) if edit_ok else []
-        return [v for v in VARIANTS if edit_ok or pool.can_serve(v)]
+        return [v for v in VARIANTS if edit_ok or (v != STORY and pool.can_serve(v))]  # story: never composite
 
     try:
         # first guess of a job's duration (BiRefNet on a CI CPU + model load), refined as jobs finish;
@@ -523,7 +710,10 @@ def run_dry_edit(stem: str, cut: Image.Image, variant: str, edit_image: str | No
     log.info("fidelity gate: %s %s %s", "OK" if rep.ok else "REJECTED", rep.reason,
              {k: v for k, v in rep.stats.items() if k not in ("wm", "hand")})
     if rep.fit is not None:
-        final = restore_product(img, ref, rep.homography if rep.homography is not None else rep.fit, alpha) if RESTORE else img
+        rstats: dict[str, Any] = {}
+        final = restore_product(img, ref, rep.homography if rep.homography is not None else rep.fit, alpha,
+                                stats=rstats) if RESTORE else img
+        log.info("restore: %s", rstats)
         outs = to_outputs(final, alpha, OUTPUT_SIZES)
         ok = rep.ok and dup_ok
         if review:
@@ -535,6 +725,63 @@ def run_dry_edit(stem: str, cut: Image.Image, variant: str, edit_image: str | No
             out.write_bytes(to_jpeg(im, JPEG_Q))
             written.append(out)
     return written
+
+
+def run_dry_story(stem: str, cut: Image.Image, plate: str | None, edit_image: str | None, online: bool,
+                  review: bool = False, gpt: bool = False) -> list[Path]:
+    """Story in dry-run, into out/story/. Render source, cheapest first:
+      (default)     OFFLINE mock: the real cutout placed on a local plate (no network, no cost);
+      --edit-image  a 2:3 render saved earlier (e.g. out/story/<stem>-story-gpt-raw.png);
+      --edit        Workers AI FLUX.2 1024x1536 (free neurons);   --gpt  ONE paid GPT Image call.
+    Then the same free checks + 9:16 framing as a real job; --review adds the AI reviewer.
+    Writes <stem>-story.jpg (what would be uploaded, logo included) and <stem>-story-zones.jpg."""
+    d = OUT_DIR / STORY
+    d.mkdir(parents=True, exist_ok=True)
+    cut, refl = clean_cutout(cut)
+    log.info("source reflection check: %s", refl)
+    ref = build_reference(cut)
+    written: list[Path] = []
+    if edit_image:
+        img = Image.open(edit_image).convert("RGB")
+    elif gpt:
+        g = OpenAIEdit({})
+        img, call = g.edit(EDIT_PROMPTS[STORY], build_story_reference(cut, STORY_GEN_SIZE), size=STORY_GEN_SIZE)
+        raw = d / f"{stem}-story-gpt-raw.png"
+        img.save(raw)
+        written.append(raw)
+        log.info("gpt story render by %s: %s", g.label, call)
+    elif online:
+        img, model = CloudflareEdit({}).edit(EDIT_PROMPTS[STORY], build_story_reference(cut, STORY_CF_REF),
+                                             STORY_GEN_SIZE, random.randint(1, 2**31 - 1))
+        raw = d / f"{stem}-story-edit-raw.png"
+        img.save(raw)
+        written.append(raw)
+        log.info("story edit by %s", model)
+    else:  # offline mock: real pixels on a local plate, placed like the vertical edit input
+        bg = local_plate("hero", plate).convert("RGB")
+        k = max(STORY_GEN_SIZE[0] / bg.width, STORY_GEN_SIZE[1] / bg.height)
+        bg = bg.resize((round(bg.width * k), round(bg.height * k)), Image.LANCZOS)
+        left, top = (bg.width - STORY_GEN_SIZE[0]) // 2, (bg.height - STORY_GEN_SIZE[1]) // 2
+        img = bg.crop((left, top, left + STORY_GEN_SIZE[0], top + STORY_GEN_SIZE[1]))
+        layer = place_story_product(cut, STORY_GEN_SIZE)
+        img.paste(layer, (0, 0), layer)
+        log.info("offline mock render (no network): cutout on the %s plate", "given" if plate else "placeholder")
+    alpha = segment_alpha(img)
+    story, info, why = story_frame(img, ref, alpha, gpt_rules=True)
+    log.info("story checks: %s %s", "OK" if story is not None else "REJECTED " + why, info)
+    if story is None:
+        return written
+    ok = True
+    if review:
+        verdict = VisionReviewer({}).review(ref.image, story, STORY)
+        log.info("AI review: %s", verdict)
+        ok = not gpt_hard_defects("", [str(x) for x in verdict.get("defects") or []])
+    tag = "" if ok else "-REJECTED"
+    stamped = stamp_logo(story, STORY_LOGO_BOTTOM_FRAC)
+    out, zones = d / f"{stem}-story{tag}.jpg", d / f"{stem}-story-zones{tag}.jpg"
+    out.write_bytes(to_jpeg(stamped, JPEG_Q))
+    zones.write_bytes(to_jpeg(story_zones_preview(stamped), JPEG_Q))
+    return [*written, out, zones]
 
 
 def run_dry(source: str, variants: list[str], plate: str | None, cutout: str | None = None,
@@ -556,6 +803,11 @@ def run_dry(source: str, variants: list[str], plate: str | None, cutout: str | N
         written.append(OUT_DIR / f"{stem}-cutout.png")
         if hand.has_hand:
             log.warning("source_has_hand -> a real run would report estado=error, error=source_has_hand")
+    if variants == [STORY]:
+        for p in run_dry_story(stem, cut, plate, edit_image, online_edit, review, gpt):
+            print(p)
+        return 0
+    variants = [v for v in variants if v != STORY]  # story only with --variant story
     if edit_image or online_edit or gpt:
         for p in run_dry_edit(stem, cut, variants[0], edit_image, online_edit, review, gpt):
             print(p)
@@ -588,7 +840,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--max-minutes", type=float, default=20)
     ap.add_argument("--dry-run", action="store_true", help="offline composite into imagegen/out/")
     ap.add_argument("--source", help="dry-run: source image file or URL")
-    ap.add_argument("--variant", choices=VARIANTS, help="dry-run: one variant (default: all)")
+    ap.add_argument("--variant", choices=VARIANTS,
+                    help="dry-run: one variant (default: all but story); 'story' = 9:16 ad into out/story/")
     ap.add_argument("--plate", help="dry-run: use this local plate instead of the placeholder")
     ap.add_argument("--cutout", help="dry-run: reuse this cutout PNG (skips segmentation)")
     ap.add_argument("--edit-image", help="dry-run: offline gate + restore on a saved FLUX.2 render")

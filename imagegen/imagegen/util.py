@@ -10,7 +10,8 @@ from typing import TextIO
 
 log = logging.getLogger("imagegen")
 
-VARIANTS = ("hero", "flatlay", "detail")
+STORY = "story"  # 9:16 Story ad (story.py): GPT/cfedit edit only, never the plate composite
+VARIANTS = ("hero", "flatlay", "detail", STORY)
 
 
 def setup_logging(verbose: bool = False, stream: TextIO | None = None) -> None:

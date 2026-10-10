@@ -37,6 +37,8 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { renderKit, kitHash, kitInputDe } from "./kit";
 import { contextoDe, reevaluarListing, type Transicion } from "./listing";
+import { disparaCampana } from "@/lib/story-ads/config";
+import { crearFilaCampana } from "@/lib/story-ads/process";
 import {
   CANAL_MARKETPLACE,
   IMAGE_MAX_ATTEMPTS,
@@ -849,6 +851,13 @@ export async function aplicarResultado(taskId: string, r: ResultadoRobot): Promi
     // pero el robot se pausa — seguir con la cuenta trabada arriesga bloqueo.
     if (r.boost?.status === "fallido" && (r.boost.detail ?? "").startsWith("necesita_humano:")) {
       await pausarRobot(tx, `pauta: ${r.boost.detail}`);
+    }
+
+    // Campaña de Historias (2026-10-10): una fila por publicación, una sola
+    // vez (UNIQUE listingId). Solo crea la fila; la campaña en Meta la arma
+    // lib/story-ads/process.ts cuando la imagen 'story' esté lista.
+    if (movido === 1 && disparaCampana(t.action)) {
+      await crearFilaCampana(tx, { listingId: t.listingId, modelId: l.modelId, taskId: t.id });
     }
 
     // Se agotó mientras se publicaba → pasa a agotado (y el próximo sync

@@ -8,6 +8,12 @@
 - susan/ashley creadas en prod (vendedor, activo). **BLOQUEADO: no hay `/api/auth/forgot` ni `lib/mailer.ts` en el código** (solo documentados en `.env.example` como si existieran) y no hay SMTP configurado en Netlify — no pueden entrar hasta que alguien construya el flujo de reset por correo o Cris les dé una contraseña a mano.
 - Deploy: el auto-deploy de Netlify por push a `master` está roto desde antes de esta sesión (`npm ci` falla en su CI con exit code 2 en varios commits previos, incluyendo el HEAD anterior a este). Se deployó a mano con `netlify deploy --build --prod` (mismo mecanismo que los últimos deploys "ready" del historial). Alguien necesita mirar el log de build de Netlify (la CLI no expone el texto completo) para arreglar el auto-deploy.
 
+## 2026-10-10 — Anuncios en Historias vía Marketing API (SIN commit, SIN migrar, SIN deploy)
+- 1 campaña por par nuevo ('publicar' del robot; 'reemplazar' solo con STORY_ADS_INCLUIR_REEMPLAZO=1), presupuesto total = min_daily_budget de la cuenta, 1 día, IG+FB Stories, click-to-WhatsApp. Código `lib/story-ads/**`, cron `netlify/functions/story-ads.mjs` (*/15), tabla `StoryAdCampaign` (UNIQUE listingId).
+- Plata: STORY_ADS_MODE off|dry|on (default dry = todo PAUSED), STORY_ADS_MAX_PER_DAY (default 1), tope duro ₡2.000 en código. CRC asumido offset 1 (lado seguro) — verificar antes de 'on'.
+- Orden: (1) `node --env-file=.env scripts/2026-10-10-story-ad-campaign.mjs` (dry) → `--apply` ANTES del deploy (2) worker imagegen con variante 'story' (otro agente) (3) deploy (4) credenciales según docs/META_ADS_SETUP.md, STORY_ADS_MODE=dry (5) Cris revisa la 1ra campaña PAUSED → on.
+- Tests: `npx tsx --test tests/story-ads.test.ts`.
+
 ## 2026-10-07 — Prueba de 5 en curso (Jarvis)
 - Hechas: Corobicí y Limón (₡17.500, 2 fotos, SIN logo, sin pauta). Pendientes: Nosara, Osa, Sierpe (fotos ya con logo).
 - Ritmo: publicar/reemplazar 1 cada 24 h (ROBOT_PUBLISH_PACING_MINUTES=1440); quitar 110 min.

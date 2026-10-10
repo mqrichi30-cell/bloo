@@ -462,8 +462,10 @@ class OpenAIEdit(Provider):
     def already_paid(self, image_id: str | None) -> bool:
         return bool(image_id) and str(image_id) in openai_ledger(self.root)["jobs"]
 
-    def estimate(self, usage: dict[str, Any] | None = None, quality: str | None = None) -> dict[str, Any]:
-        return gpt_cost_usd(self.model, self.size[0], self.size[1], quality or self.quality, usage)
+    def estimate(self, usage: dict[str, Any] | None = None, quality: str | None = None,
+                 size: tuple[int, int] | None = None) -> dict[str, Any]:
+        w, h = size or self.size
+        return gpt_cost_usd(self.model, w, h, quality or self.quality, usage)
 
     @staticmethod
     def _quality_rejected(r: requests.Response) -> bool:
@@ -496,12 +498,17 @@ class OpenAIEdit(Provider):
         except ValueError:
             return ""
 
-    def edit(self, prompt: str, ref: Image.Image, image_id: str | None = None) -> tuple[Image.Image, dict[str, Any]]:
+    def edit(self, prompt: str, ref: Image.Image, image_id: str | None = None,
+             size: tuple[int, int] | None = None) -> tuple[Image.Image, dict[str, Any]]:
         """The single paid call. Returns (image, call info with the cost estimate).
+        `size` overrides OPENAI_IMAGE_SIZE for this call (Story: 1024x1536).
 
         Retries ONCE only when nothing can have been billed: connection failure before the request
         was sent, or HTTP 5xx. A read timeout after sending is counted as spent and not retried.
         """
+        size = size or self.size
+        if size[0] % 16 or size[1] % 16:
+            raise ValueError("gptimage size edges must be multiples of 16")
         if self.already_paid(image_id):
             raise AlreadyPaid(f"image {image_id} already had its paid GPT call")
         cap = openai_daily_cap()
@@ -510,7 +517,7 @@ class OpenAIEdit(Provider):
         buf = io.BytesIO()
         ref.convert("RGB").save(buf, "PNG")
         data = {"model": self.model, "prompt": prompt, "quality": self.quality, "n": "1",
-                "size": f"{self.size[0]}x{self.size[1]}", "output_format": "png"}
+                "size": f"{size[0]}x{size[1]}", "output_format": "png"}
         if self.model.startswith(("gpt-image-1.5", "gpt-image-1")) and not self.model.endswith("mini"):
             data["input_fidelity"] = "high"  # gpt-image-2*: must be omitted (always high)
         headers = {"Authorization": "Bearer " + (env("OPENAI_API_KEY") or "")}
@@ -521,7 +528,7 @@ class OpenAIEdit(Provider):
         while True:
             attempt += 1
             body_fields = {**data, "quality": quality}
-            est = self.estimate(quality=quality)
+            est = self.estimate(quality=quality, size=size)
             self._book(est["usd"], +1, image_id)
             self.state["last_call"] = now_ts()
             t0 = time.monotonic()
@@ -568,7 +575,7 @@ class OpenAIEdit(Provider):
                 img = _decode_image(base64.b64decode(body["data"][0]["b64_json"]))
             except (ValueError, KeyError, IndexError, TypeError, OSError) as e:
                 raise ProviderError(f"gptimage: unreadable response ({type(e).__name__})") from e
-            call = self.estimate(body.get("usage"), quality)
+            call = self.estimate(body.get("usage"), quality, size)
             if call["usd"] != est["usd"]:  # replace the booked estimate with the usage-based one
                 led = openai_ledger(self.root)
                 for k in ("usd", "month_usd"):

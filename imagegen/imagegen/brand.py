@@ -24,13 +24,24 @@ def _mask() -> Image.Image:
     return Image.open(LOGO_MASK).convert("L")
 
 
-def stamp_logo(img: Image.Image) -> Image.Image:
-    """Copy of `img` with the bloo logo centred at the bottom (same geometry for 4:5 and 1:1)."""
-    out = img.convert("RGB").copy()
-    w = round(out.width * LOGO_WIDTH_FRAC)
+def logo_box(size: tuple[int, int], bottom_frac: float = LOGO_BOTTOM_FRAC,
+             width_frac: float = LOGO_WIDTH_FRAC) -> tuple[int, int, int, int]:
+    """(l, t, r, b) the logo occupies on an image of `size` (same maths as stamp_logo)."""
+    W, H = size
     m = _mask()
-    m = m.resize((w, round(m.height * w / m.width)), Image.LANCZOS).point(lambda v: round(v * LOGO_OPACITY))
-    x = (out.width - w) // 2
-    y = out.height - m.height - round(out.height * LOGO_BOTTOM_FRAC)
+    w = round(W * width_frac)
+    h = round(m.height * w / m.width)
+    x = (W - w) // 2
+    y = H - h - round(H * bottom_frac)
+    return x, y, x + w, y + h
+
+
+def stamp_logo(img: Image.Image, bottom_frac: float = LOGO_BOTTOM_FRAC,
+               width_frac: float = LOGO_WIDTH_FRAC) -> Image.Image:
+    """Copy of `img` with the bloo logo centred at the bottom (same geometry for 4:5 and 1:1).
+    Story (9:16): bottom_frac = story.STORY_LOGO_BOTTOM_FRAC keeps it above Meta's bottom 20 %."""
+    out = img.convert("RGB").copy()
+    x, y, r, b = logo_box(out.size, bottom_frac, width_frac)
+    m = _mask().resize((r - x, b - y), Image.LANCZOS).point(lambda v: round(v * LOGO_OPACITY))
     out.paste(Image.new("RGB", m.size, LOGO_RGB), (x, y), m)
     return out

@@ -11,7 +11,7 @@
 // de la sesión).
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { IMAGE_LEASE_MINUTES, IMAGE_MAX_ATTEMPTS, VARIANTES_ACTIVAS } from "./status";
+import { IMAGE_LEASE_MINUTES, IMAGE_MAX_ATTEMPTS, VARIANTES_RECLAMABLES } from "./status";
 
 const SCHEMA = Prisma.raw(`"bloo"`);
 const AHORA = Prisma.raw(`timezone('utc', now())`);
@@ -24,7 +24,9 @@ const LEASE = Prisma.raw(`interval '${IMAGE_LEASE_MINUTES} minutes'`);
 // publicaciones que todavía piden imágenes: no se gasta IA en pausadas ni
 // vendidas. Solo variantes activas (hoy solo 'hero', decisión 2026-10-06): una
 // flatlay/detail que haya quedado pendiente no se genera aunque exista.
-const VARIANTES = Prisma.join(VARIANTES_ACTIVAS.map((v) => Prisma.sql`${v}`));
+// 'story' (2026-10-10) también se reclama: solo existe si la pidió una
+// campaña de Historias (lib/story-ads/process.ts).
+const VARIANTES = Prisma.join(VARIANTES_RECLAMABLES.map((v) => Prisma.sql`${v}`));
 const RECLAMABLE = Prisma.sql`
   g."attempts" < ${IMAGE_MAX_ATTEMPTS}
   AND g."variant" IN (${VARIANTES})
@@ -44,6 +46,10 @@ export interface ClaimedImage {
   color: string | null;
   variant: string;
   sourceUrl: string;
+  /** Solo variant='story': el hero aprobado más reciente (4:5 si hay), por si
+   *  el worker arma la historia reencuadrando el hero en vez de generar de
+   *  cero. null en las demás variantes. */
+  heroUrl: string | null;
 }
 
 export async function claimImages(limit: number): Promise<ClaimedImage[]> {
@@ -71,7 +77,12 @@ export async function claimImages(limit: number): Promise<ClaimedImage[]> {
           LIMIT ${limit}
           FOR UPDATE SKIP LOCKED
        )
-    RETURNING t."id" AS "imageId", t."modelId", m."nombre", m."color", t."variant", t."sourceUrl"`;
+    RETURNING t."id" AS "imageId", t."modelId", m."nombre", m."color", t."variant", t."sourceUrl",
+              CASE WHEN t."variant" = 'story' THEN (
+                SELECT COALESCE(h."portraitUrl", h."publicUrl") FROM ${SCHEMA}."GeneratedImage" h
+                 WHERE h."modelId" = t."modelId" AND h."variant" = 'hero' AND h."estado" = 'lista'
+                 ORDER BY h."createdAt" DESC LIMIT 1
+              ) END AS "heroUrl"`;
 }
 
 export async function countPending(): Promise<number> {

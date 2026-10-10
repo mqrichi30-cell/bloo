@@ -656,6 +656,7 @@ model ChannelListing {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
   tasks         MarketplaceTask[]
+  storyAd       StoryAdCampaign?
 
   @@unique([modelId, canal])
   @@index([status])
@@ -707,12 +708,75 @@ model MarketplaceTask {
   @@index([listingId])
 }
 
+// Campaña de anuncio en HISTORIAS (Instagram + Facebook Stories) vía Meta
+// Marketing API, UNA por publicación y una sola vez en la vida (2026-10-10).
+// La crea aplicarResultado (lib/marketplace/tasks.ts) cuando el robot reporta
+// 'hecha' un 'publicar'; la procesa lib/story-ads/process.ts desde la función
+// programada netlify/functions/story-ads.mjs.
+//
+// PLATA (fail-closed, mismo criterio que robot/src/boost.mjs):
+//  · listingId UNIQUE = jamás dos campañas para el mismo par, aunque el robot
+//    reporte dos veces o el trigger corra dos veces (createMany skipDuplicates).
+//  · Presupuesto TOTAL (lifetime) = mínimo diario que Meta exige en la cuenta,
+//    leído de la API (nunca hardcodeado), acotado por el tope duro del código
+//    (lib/story-ads/config.ts). Si el mínimo supera el tope → 'fallida'.
+//  · Los objetos en Meta llevan nombre determinístico (bloo-story-<listingId>-…)
+//    y SIEMPRE se busca por nombre antes de crear: un POST con resultado
+//    incierto (timeout) nunca se repite a ciegas.
+//  · modo se congela al empezar: 'dry' = todo PAUSED (no gasta), 'on' = se
+//    activa la campaña una vez. El tope diario cuenta activadaAt (se escribe
+//    ANTES del POST de activación).
+// estado: "esperando_imagen" | "pendiente" | "creando" | "sin_credenciales"
+//       | "dry" | "activa" | "terminada" | "fallida" | "omitida"
+// Montos en CÉNTIMOS de colón (invariante del repo). Nunca se borra (trigger).
+model StoryAdCampaign {
+  id               String         @id @default(uuid())
+  listingId        String         @unique
+  listing          ChannelListing @relation(fields: [listingId], references: [id])
+  modelId          String
+  // MarketplaceTask 'publicar' que la disparó (rastro, sin FK).
+  taskId           String?
+  estado           String         @default("esperando_imagen")
+  modo             String?
+  storyImageId     String?
+  // Presupuesto total enviado a Meta y el mínimo diario que Meta reportó.
+  presupuestoCent  Int?
+  minimoDiarioCent Int?
+  moneda           String?
+  // Gasto real según Insights de Meta (se refresca mientras está activa).
+  gastoCent        Int?
+  gastoAt          DateTime?
+  metaCampaignId   String?
+  metaAdSetId      String?
+  metaImageHash    String?
+  metaCreativeId   String?
+  metaAdId         String?
+  // effective_status del anuncio en Meta (ACTIVE, PAUSED, DISAPPROVED…).
+  metaStatus       String?
+  inicioAt         DateTime?
+  finAt            DateTime?
+  activadaAt       DateTime?
+  attempts         Int            @default(0)
+  lastError        String?
+  nextAttemptAt    DateTime?
+  // Lease del procesador: una sola campaña en curso a la vez.
+  lockedUntil      DateTime?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  doneAt           DateTime?
+
+  @@index([estado, nextAttemptAt])
+  @@index([activadaAt])
+}
+
 // Imagen generada por IA para el kit. APPEND-ONLY: regenerar = fila nueva y la
 // vieja pasa a "rechazada"; nunca se borra (trigger en Postgres). Así queda
 // rastro de qué se generó, con qué proveedor, y cuántos intentos costó.
-// variant: "hero" | "flatlay" | "detail" — desde 2026-10-06 solo se encola
-//          'hero' (VARIANTES_ACTIVAS en lib/marketplace/status.ts); las otras
-//          quedan como historia.
+// variant: "hero" | "flatlay" | "detail" | "story" — desde 2026-10-06 solo se
+//          encola 'hero' (VARIANTES_ACTIVAS en lib/marketplace/status.ts); las
+//          otras quedan como historia. 'story' (2026-10-10, 1080x1920) NO la
+//          encola el sync: la pide lib/story-ads/process.ts solo para las
+//          publicaciones con campaña de Historias (StoryAdCampaign).
 // provider aceptado para publicar: "gptimage:..." (OpenAI) o "cfedit:..."
 // estado:  "pendiente" | "generando" | "lista" | "rechazada" | "error"
 // La cola la consume un worker Python en GitHub Actions vía /api/imagegen/**.

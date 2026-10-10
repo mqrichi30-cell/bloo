@@ -5,6 +5,7 @@ import { ExternalLink, Pause } from "lucide-react";
 import { formatCRC } from "@/lib/money";
 import { SecondaryButton } from "@/components/ui/Button";
 import { useToast } from "@/components/ToastProvider";
+import { StoryAdChip } from "./StoryAdChip";
 import type { Listing } from "./types";
 
 interface PublishedCardProps {
@@ -44,6 +45,7 @@ export function PublishedCard({ listing, onPausar }: PublishedCardProps) {
         </div>
         <p className="shrink-0 tabular-nums text-data-md text-ink-900">{formatCRC(listing.precioVentaCent)}</p>
       </div>
+      {listing.storyAd && <StoryAdChip storyAd={listing.storyAd} />}
       <div className="flex gap-2">
         {listing.externalUrl && (
           <a

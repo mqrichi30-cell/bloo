@@ -21,6 +21,10 @@ Composites of a studio 3/4 shot over a separately generated plate looked pasted 
 
 Offline check of a saved render: `python -m imagegen.run --dry-run --source <src> --cutout out\<id>-cutout.png --edit-image render.jpg`. `--edit` in place of `--edit-image` calls Workers AI for real, which costs about 160 neurons.
 
+**See-through lenses (hero, story and cfedit):** the real-pixel restore keeps the frame and temples 100 % supplier pixels. Inside the glass (`edit.lens_mask`, the smooth regions the frame encloses), the supplier's lens colour is modulated by the scene the model rendered behind it, so the linen and shadows show through. That modulation is normalised per channel so the mean lens colour does not move. If the mean a*b* or L* of the glass drifts (`LENS_DAB_MAX` / `LENS_DL_MAX`), it falls back to the opaque restore. The result is logged in `qa.*.seeThrough`. `IMAGEGEN_LENS_SEE_THROUGH=0` turns it off. The estuche never uses it.
+
+**Story (9:16, 1080x1920, Stories ads):** jobs with `variant='story'` use the hero scene and prompt plus vertical framing. They make ONE paid GPT call at 1024x1536 and fall back to cfedit. The gates are the same as the hero's, and the AI reviewer checks the final frame. `story.py` handles the scale and side crop, the Meta safe zones (product outside the top 14 % and the bottom 20 %) and the logo above the bottom 20 %. To try it: `--dry-run --variant story --source <src> --cutout out\<id>-cutout.png`. With no other flag it runs offline on a mock, with no network. `--edit-image <2:3 render>`, `--edit` and `--gpt` (+ `--review`) also work. The output goes to `out\story\`, and `*-story-zones.jpg` shows the zones. Backend changes: `STORY_API_CONTRACT.md`.
+
 **Re-generating images that are already `lista`:** `python -m imagegen.requeue --all-lista` does a dry-run. Add `--apply` to insert one new `pendiente` row per `lista` row. The old rows stay `lista`, so listings stay publishable. The backend retires an old row once its replacement is `lista`, and `--finalize --apply` does the same by hand. This needs `DATABASE_URL` (read from `C:\bloo\.env` if unset) and `pip install "psycopg[binary]"`.
 
 ## Flow

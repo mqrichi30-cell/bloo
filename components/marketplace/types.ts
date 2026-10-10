@@ -23,6 +23,28 @@ export interface ListingKit {
   whatsappUrl: string;
 }
 
+/** Campaña de anuncio en Historias (IG + FB) de la publicación. Montos en céntimos. */
+export type StoryAdEstado =
+  | "esperando_imagen"
+  | "pendiente"
+  | "creando"
+  | "sin_credenciales"
+  | "dry"
+  | "activa"
+  | "terminada"
+  | "fallida"
+  | "omitida";
+
+export interface StoryAd {
+  estado: StoryAdEstado;
+  modo: "dry" | "on" | null;
+  presupuestoCent: number | null;
+  gastoCent: number | null;
+  detalle: string | null;
+  finAt: string | null;
+  at: string;
+}
+
 export interface Listing {
   listingId: string;
   modelId: string;
@@ -35,6 +57,8 @@ export interface Listing {
   publishedAt: string | null;
   images: ListingImage[];
   kit: ListingKit;
+  /** null = esta publicación no tiene campaña de Historias. */
+  storyAd?: StoryAd | null;
 }
 
 export type ListingAction =

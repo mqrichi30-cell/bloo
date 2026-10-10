@@ -367,7 +367,7 @@ def test_non_hero_never_pays(job_env: dict[str, Any]) -> None:
             mock.patch.object(run, "edit_scene", return_value=(job_env["outs"], {"model": "flux-2-klein-4b"})):
         out = run.process_job(j, mock.Mock(), job_env["storage"], mock.Mock(), FakeReviewer(),
                               FakeGPT(None), None)  # type: ignore[arg-type]
-    assert out["provider"].startswith("cfedit:") and out["qa"]["gpt"] == {"skipped": "hero only"}
+    assert out["provider"].startswith("cfedit:") and out["qa"]["gpt"] == {"skipped": "hero/story only"}
 
 
 def test_no_paid_call_when_review_cannot_run() -> None:

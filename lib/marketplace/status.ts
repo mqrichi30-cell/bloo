@@ -17,7 +17,7 @@ export type ListingStatus = (typeof LISTING_STATUSES)[number];
 
 /** Variantes válidas en la base (CHECK de GeneratedImage): incluye las
  *  históricas. Para decidir qué se encola/muestra usar VARIANTES_ACTIVAS. */
-export const IMAGE_VARIANTS = ["hero", "flatlay", "detail"] as const;
+export const IMAGE_VARIANTS = ["hero", "flatlay", "detail", "story"] as const;
 export type ImageVariant = (typeof IMAGE_VARIANTS)[number];
 
 /**
@@ -28,6 +28,14 @@ export type ImageVariant = (typeof IMAGE_VARIANTS)[number];
  * scripts/2026-10-06-cancelar-flatlay-detail.ts.
  */
 export const VARIANTES_ACTIVAS = ["hero"] as const satisfies readonly ImageVariant[];
+
+/**
+ * Lo que el worker puede reclamar: las activas + 'story' (1080x1920, 2026-10-10).
+ * 'story' NO es activa: el sync no la encola para todas las publicaciones;
+ * la pide lib/story-ads/process.ts solo para las que tienen campaña de
+ * Historias, y no se muestra como foto de Marketplace.
+ */
+export const VARIANTES_RECLAMABLES = [...VARIANTES_ACTIVAS, "story"] as const satisfies readonly ImageVariant[];
 
 export function esVarianteActiva(v: string): boolean {
   return (VARIANTES_ACTIVAS as readonly string[]).includes(v);

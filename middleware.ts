@@ -33,6 +33,8 @@ const PUBLIC_API_PATHS = [
   // Actions). Cada ruta exige `x-cron-secret` y responde 503 si CRON_SECRET
   // no está configurado — fail-closed, ver lib/marketplace/cron-auth.ts.
   "/api/cron/marketplace-sync",
+  // Campañas de Historias (netlify/functions/story-ads.mjs): mismo x-cron-secret fail-closed.
+  "/api/cron/story-ads",
   "/api/imagegen/claim",
   "/api/imagegen/pending-count",
   // Robot de Marketplace (Playwright en GitHub Actions): mismo x-cron-secret

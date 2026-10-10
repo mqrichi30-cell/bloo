@@ -36,6 +36,7 @@ SCENES = {
     "hero": "a beige linen surface, a navy textile (napkin/cloth) and a tropical leaf",
     "flatlay": "beige linen filling the frame, a navy object and a tropical leaf",
     "detail": "a beige linen surface and a tropical leaf",
+    "story": "a beige linen surface, a navy textile (napkin/cloth) and a tropical leaf (tall vertical frame)",
 }
 
 PROMPT = """You are a strict QA reviewer for an e-commerce catalog photo of ONE pair of sunglasses.

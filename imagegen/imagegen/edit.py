@@ -19,6 +19,7 @@ model's low-frequency light), so studs, tortoise pattern and hinge details are t
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -42,7 +43,9 @@ LINEN_MIN = 0.30        # fraction of non-product pixels that must read as beige
 
 _KEEP = ("Keep the sunglasses exactly as they are in image 0: same position in the frame, same size, same "
          "viewing angle and pose, same frame shape, frame color and pattern, lens tint, temple arms and "
-         "hinge details. Do not redesign, restyle, rotate or duplicate them.")
+         "hinge details. Do not redesign, restyle, rotate or duplicate them. The lenses are real see-through "
+         "tinted glass: the linen, its weave and the soft shadows behind them stay visible through the lenses, "
+         "dimmed by the unchanged lens tint.")
 _TAIL = ("Warm soft natural window daylight, gentle shallow depth of field, crisp focus on the sunglasses, "
          "photoreal editorial product photograph, quiet coastal old-money mood. No text, no logos, no hands.")
 
@@ -61,6 +64,14 @@ EDIT_PROMPTS: dict[str, str] = {
                "shadow, a faint dusty-blue shadow across the linen behind, one tropical leaf melting into "
                "bokeh at the top edge. " + _TAIL),
 }
+
+# Story (9:16 ad): the hero prompt AS IS plus the vertical framing. The edit input is a vertical 2:3
+# canvas with the product already placed for the Story safe zones (story.build_story_reference).
+STORY_FRAMING = (" Tall vertical phone-story framing of the same scene: the linen tablecloth continues "
+                 "further down below the sunglasses toward the bottom edge, and the softly blurred napkin "
+                 "and monstera leaf fill the upper part of the frame; keep the top and bottom edges calm, "
+                 "with nothing cut in half there.")
+EDIT_PROMPTS["story"] = EDIT_PROMPTS["hero"] + STORY_FRAMING
 
 
 # Fixed accessory photo (python -m imagegen.estuche): same scene as the hero, for the glasses case.
@@ -115,6 +126,7 @@ _SCENE_FIX = {
     "hero": "The scene must clearly show the beige linen, a folded navy linen napkin and one monstera leaf.",
     "flatlay": "The scene must clearly show beige linen, a small navy dish and one palm leaf.",
     "detail": "The scene must clearly show beige linen and one tropical leaf.",
+    "story": "The scene must clearly show the beige linen, a folded navy linen napkin and one monstera leaf.",
 }
 
 
@@ -167,6 +179,7 @@ class Reference:
     alpha: np.ndarray        # float 0..1, same canvas
     cutout: Image.Image      # full-resolution RGBA product (for the pixel restore)
     box: tuple[int, int, int, int]  # where the full-res cutout sits inside the REF canvas (l, t, r, b)
+    lens: np.ndarray | None = None  # glass mask on `cutout` (0..1), computed lazily by lens_of()
 
 
 def build_reference(cut: Image.Image, margin: float = 0.10, side: int = REF_SIDE) -> Reference:
@@ -493,9 +506,112 @@ def fidelity_gate(ref: Reference, out: Image.Image, out_alpha: np.ndarray, resto
     return GateReport(True, "", fit, stats, hm)
 
 
+# ------------------------------------------------------------------ see-through lenses
+# The supplier photo is shot on white, so the glass of the lenses carries the studio fill: restored
+# as is it reads as an opaque, milky patch ("no se ve a traves del lente"). Inside the GLASS only
+# (never the frame or temples), the real pixels are kept as the lens colour and modulated by the
+# scene the edit model rendered behind the glass, normalised per channel so the mean lens colour
+# (Ley 7472: no alterar el producto) stays the supplier's; LENS_DAB_MAX rejects any drift.
+SEE_THROUGH = os.environ.get("IMAGEGEN_LENS_SEE_THROUGH", "1").strip() != "0"  # 0 = old opaque restore
+LENS_SMOOTH_GRAD = 2.0     # mean |grad| (grey levels / px) under which a pixel counts as smooth glass
+LENS_MIN_AREA = 0.03       # a lens core is at least 3 % of the product area
+LENS_GROW_DE = 14.0        # grow the core into neighbours within this Lab distance of its mean colour
+LENS_GROW_FRAC = 0.02      # ...up to this share of the product width
+LENS_GAIN = 2.2            # strength of the scene seen through (the model's own glass flattens it)
+LENS_MOD_CLIP = (0.45, 1.8)
+LENS_DAB_MAX = 5.0         # mean a*b* of the restored glass vs the supplier's glass
+LENS_DL_MAX = 8.0          # mean L* of the restored glass vs the opaque restore
+
+
+def lens_mask(cut: Image.Image) -> np.ndarray:
+    """Glass of the lenses on an RGBA product cutout (float 0..1). Lenses are large smooth regions
+    enclosed by the frame: smooth components that never touch the background, grown by colour up to
+    the bevel and slightly eroded, so the rim itself stays 100 % supplier pixels. Empty if unsure."""
+    rgba = cut.convert("RGBA")
+    solid = np.asarray(rgba.getchannel("A")) > 200
+    H, W = solid.shape
+    if solid.sum() < 500:
+        return np.zeros((H, W), np.float32)
+    grey = np.asarray(rgba.convert("L").filter(ImageFilter.GaussianBlur(1.5)), np.float32)
+    gy, gx = np.gradient(grey)
+    r = max(2, W // 150)
+    gm = Image.fromarray(np.uint8(np.clip(np.hypot(gx, gy) * 10, 0, 255)))
+    smooth = (np.asarray(gm.filter(ImageFilter.BoxBlur(r)), np.float32) / 10 < LENS_SMOOTH_GRAD) & solid
+    labels, n = _label(smooth)
+    sizes = np.bincount(labels.ravel(), minlength=n + 1)
+    lab = _lab(np.asarray(rgba.convert("RGB")))
+    area = float(solid.sum())
+    out = np.zeros((H, W), bool)
+    found = 0
+    for i in np.argsort(sizes[1:])[::-1] + 1:
+        if sizes[i] < LENS_MIN_AREA * area or found == 2:
+            break
+        comp = labels == i
+        ring = _dilate(comp, r) & ~comp
+        if not ring.any() or (~solid[ring]).mean() > 0.02:  # touches the background: frame, not glass
+            continue
+        mean = lab[comp].mean(0)
+        close = (np.linalg.norm(lab - mean, axis=-1) < LENS_GROW_DE) & solid
+        grown = comp
+        for _ in range(max(1, round(LENS_GROW_FRAC * W))):
+            nxt = _dilate(grown, 1) & close
+            if nxt.sum() == grown.sum():
+                break
+            grown = nxt | grown
+        out |= grown
+        found += 1
+    if not found:
+        return np.zeros((H, W), np.float32)
+    out = np.asarray(Image.fromarray(np.uint8(out) * 255).filter(ImageFilter.MaxFilter(5))
+                     .filter(ImageFilter.MinFilter(5)).filter(ImageFilter.MinFilter(3)), np.uint8) > 0  # close, then erode 1 px
+    return np.asarray(Image.fromarray(np.uint8(out) * 255).filter(ImageFilter.GaussianBlur(0.8)), np.float32) / 255
+
+
+def lens_of(ref: Reference) -> np.ndarray:
+    if ref.lens is None:
+        ref.lens = lens_mask(ref.cutout)
+    return ref.lens
+
+
+def see_through(relit: np.ndarray, gen: np.ndarray, real_rgb: np.ndarray, lens: np.ndarray,
+                stats: dict[str, Any] | None = None) -> np.ndarray:
+    """Restored pixels with the glass made transparent: relit supplier colour x (scene the model
+    rendered behind the glass / its mean). Falls back to the opaque restore if the glass colour drifts."""
+    region = lens > 0.5
+    info: dict[str, Any] = {"lens_px": int(region.sum())}
+    if region.sum() < 200:
+        info["lens"] = "none"
+        if stats is not None:
+            stats["seeThrough"] = info
+        return relit
+    behind = gen[region]
+    mod = gen / np.maximum(behind.mean(0), 1.0)
+    # dark tints let less of the scene through (the studio reflection dominates)
+    light = float(_lab(real_rgb[region])[:, 0].mean())
+    strength = LENS_GAIN * float(np.clip(light / 70.0, 0.35, 1.0))
+    mod = np.clip(1 + strength * (mod - 1), *LENS_MOD_CLIP)
+    # never brighten a channel past 255: clipping one channel only would shift the lens hue
+    mod = np.minimum(mod, (255.0 / np.maximum(relit.max(-1), 1.0))[..., None])
+    out = relit * (1 + lens[..., None] * (mod - 1))
+    out = np.clip(out, 0, 255)
+    dab = mean_chroma_shift(real_rgb[region], out[region])
+    dab_opaque = mean_chroma_shift(real_rgb[region], relit[region])
+    dl = float(abs(_lab(out[region])[:, 0].mean() - _lab(relit[region])[:, 0].mean()))
+    info.update(strength=round(strength, 2), dab=round(dab, 2), dab_opaque=round(dab_opaque, 2), dL=round(dl, 2))
+    if dab > max(LENS_DAB_MAX, dab_opaque + 1.0) or dl > LENS_DL_MAX:
+        info["lens"] = "opaque (colour drift)"
+        out = relit
+    else:
+        info["lens"] = "see-through"
+    if stats is not None:
+        stats["seeThrough"] = info
+    return out
+
+
 # ------------------------------------------------------------------ restore real pixels
 def restore_product(out: Image.Image, ref: Reference, fit: Fit | np.ndarray, out_alpha: np.ndarray,
-                    light_radius: float = 0.03) -> Image.Image:
+                    light_radius: float = 0.03, stats: dict[str, Any] | None = None,
+                    lenses: bool = True) -> Image.Image:
     """Lay the supplier's real product pixels over the model's rendition.
 
     The real cutout is warped with the fitted transform, then relit: its low-frequency light is
@@ -503,6 +619,8 @@ def restore_product(out: Image.Image, ref: Reference, fit: Fit | np.ndarray, out
     direction and colour while keeping every stud, hinge and pattern detail of the real photo.
     Only the region where both silhouettes agree is replaced; the model's own edge (anti-aliased
     against the linen, with its contact shadow) is kept outside it.
+    Inside the glass of the lenses (lens_mask) the scene shows through: see_through(); the measured
+    glass colour lands in stats['seeThrough'].
     """
     W, H = out.size
     # warp from the full-resolution cutout: the ref canvas is REF_SIDE, the cutout is larger
@@ -543,6 +661,14 @@ def restore_product(out: Image.Image, ref: Reference, fit: Fit | np.ndarray, out
     else:
         cast = np.ones(3, np.float32)
     relit = np.clip(real_rgb * ratio * cast, 0, 255)
+    if SEE_THROUGH and lenses:  # lenses=False for non-glasses products (estuche)
+        lens = lens_of(ref)
+        if lens.any():
+            lw = np.asarray(_perspective(Image.fromarray(np.uint8(lens * 255)), to_cut @ hm, (W, H), Image.BILINEAR),
+                            np.float32) / 255
+            relit = see_through(relit, gen, real_rgb, lw * (agree > 0.5), stats)
+        elif stats is not None:
+            stats["seeThrough"] = {"lens": "not found"}
     res = gen * (1 - agree[..., None]) + relit * agree[..., None]
     return Image.fromarray(np.uint8(np.clip(res, 0, 255)), "RGB")
 

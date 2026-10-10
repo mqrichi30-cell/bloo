@@ -38,6 +38,10 @@ export async function GET() {
         orderBy: { updatedAt: "desc" },
         take: 1,
       },
+      // Campaña de Historias (lib/story-ads): una por publicación.
+      storyAd: {
+        select: { estado: true, modo: true, presupuestoCent: true, gastoCent: true, lastError: true, finAt: true, updatedAt: true },
+      },
       model: {
         select: {
           id: true,
@@ -110,6 +114,17 @@ export async function GET() {
             verificado: boostVerificado(l.tasks[0].boostStatus, l.tasks[0].boostDetail),
             detail: l.tasks[0].boostDetail,
             at: l.tasks[0].boostedAt ?? l.tasks[0].updatedAt,
+          }
+        : null,
+      storyAd: l.storyAd
+        ? {
+            estado: l.storyAd.estado,
+            modo: l.storyAd.modo,
+            presupuestoCent: l.storyAd.presupuestoCent,
+            gastoCent: l.storyAd.gastoCent,
+            detalle: l.storyAd.lastError,
+            finAt: l.storyAd.finAt,
+            at: l.storyAd.updatedAt,
           }
         : null,
       // true = lo publicado en Marketplace ya no coincide con el kit actual
