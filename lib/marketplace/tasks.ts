@@ -389,7 +389,35 @@ export async function ritmoRobot(
     const next = new Date(d.getTime() + min * 60_000);
     return next.getTime() > Date.now() ? next : null;
   };
-  return { general: futuro(ultima?.doneAt, ROBOT_PACING_MINUTES), publicar: futuro(ultimaPub?.doneAt, publishPacingMinutes()) };
+  const hora = publishHoraCR();
+  return {
+    general: futuro(ultima?.doneAt, ROBOT_PACING_MINUTES),
+    publicar: hora === null ? futuro(ultimaPub?.doneAt, publishPacingMinutes()) : proximoSlotDiario(ultimaPub?.doneAt ?? null, hora),
+  };
+}
+
+/** Hora fija de publicación en hora CR (Cris 2026-10-11: "7am todos los
+ *  días"). Env ROBOT_PUBLISH_HORA_CR (0-23). Sin env = ritmo por minutos
+ *  desde la última (que se corre ~1 h/día por el disparador horario). */
+export function publishHoraCR(env: NodeJS.ProcessEnv = process.env): number | null {
+  const raw = env.ROBOT_PUBLISH_HORA_CR?.trim();
+  if (!raw) return null;
+  const h = Number(raw);
+  return Number.isInteger(h) && h >= 0 && h <= 23 ? h : null;
+}
+
+/** null = ya toca publicar; si no, cuándo. Una publicación por día CR, a
+ *  partir de `hora` (CR = UTC−6, sin horario de verano). */
+export function proximoSlotDiario(ultima: Date | null, hora: number, ahora: Date = new Date()): Date | null {
+  const DIA = 86_400_000;
+  const OFFSET = 6 * 3_600_000; // CR → UTC
+  // Inicio del "día de publicación" actual: la última `hora` CR <= ahora.
+  const crAhora = ahora.getTime() - OFFSET;
+  let slot = Math.floor(crAhora / DIA) * DIA + hora * 3_600_000;
+  if (slot > crAhora) slot -= DIA;
+  const slotUtc = slot + OFFSET;
+  if (!ultima || ultima.getTime() < slotUtc) return null; // no se publicó en este día → ya
+  return new Date(slotUtc + DIA);
 }
 
 /** Próxima vez que hay algo ejecutable (null = ya hay): combina el ritmo con lo que está en cola. */

@@ -18,7 +18,7 @@ import { avanzarCampana, type CampanaCtx, type CampanaRow } from "@/lib/story-ad
 import { GraphError, type GraphClient, type GraphParams } from "@/lib/story-ads/graph";
 import { storyCopy } from "@/lib/story-ads/copy";
 
-const env = (o: Record<string, string>) => o as unknown as NodeJS.ProcessEnv;
+const env = (o: Record<string, string>) => o as unknown as unknown as NodeJS.ProcessEnv;
 
 // ── Config / topes ─────────────────────────────────────────────────────────
 test("modo: default dry, inválido = off (fail-closed)", () => {
@@ -392,7 +392,7 @@ test("hayLugarParaCampana: día de por medio y tope total", async () => {
         filas.filter((f) => !where.estado.notIn.includes(f.estado) && (!where.createdAt || f.createdAt >= where.createdAt.gte)).length,
     },
   } as never;
-  const env = { STORY_ADS_SEPARACION_HORAS: "36", STORY_ADS_MAX_TOTAL: "2" } as NodeJS.ProcessEnv;
+  const env = { STORY_ADS_SEPARACION_HORAS: "36", STORY_ADS_MAX_TOTAL: "2" } as unknown as NodeJS.ProcessEnv;
   const t0 = new Date("2026-10-11T01:00:00Z");
   assert.equal(await hayLugarParaCampana(tx, env, t0), true);
   filas.push({ estado: "activa", createdAt: t0 });
@@ -402,5 +402,5 @@ test("hayLugarParaCampana: día de por medio y tope total", async () => {
   assert.equal(await hayLugarParaCampana(tx, env, new Date("2026-10-12T16:00:00Z")), true);
   filas.push({ estado: "terminada", createdAt: new Date("2026-10-12T16:00:00Z") });
   assert.equal(await hayLugarParaCampana(tx, env, new Date("2026-10-20T16:00:00Z")), false); // tope 2
-  assert.equal(await hayLugarParaCampana(tx, {} as NodeJS.ProcessEnv, new Date("2026-10-12T17:00:00Z")), true); // sin env: libre
+  assert.equal(await hayLugarParaCampana(tx, {} as unknown as NodeJS.ProcessEnv, new Date("2026-10-12T17:00:00Z")), true); // sin env: libre
 });
