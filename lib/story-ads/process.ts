@@ -59,7 +59,33 @@ export async function crearFilaCampana(
   tx: Prisma.TransactionClient,
   data: { listingId: string; modelId: string; taskId: string }
 ): Promise<void> {
+  if (!(await hayLugarParaCampana(tx))) return;
   await tx.storyAdCampaign.createMany({ data: [{ ...data, estado: "esperando_imagen" }], skipDuplicates: true });
+}
+
+/** Ritmo de la pauta (Cris 2026-10-11): Marketplace publica a diario, pero la
+ *  historia pagada va día de por medio y solo para N campañas de prueba.
+ *  Si no toca, NO se crea la fila: así tampoco se paga la imagen story.
+ *  - STORY_ADS_SEPARACION_HORAS: horas mínimas desde la última campaña viva
+ *    (36 ≈ día de por medio con la publicación diaria del robot). 0 = sin espera.
+ *  - STORY_ADS_MAX_TOTAL: tope de campañas vivas en total. Vacío = sin tope.
+ *  "Viva" = cualquier estado salvo omitida/fallida (esas no gastaron). */
+export async function hayLugarParaCampana(
+  tx: Prisma.TransactionClient,
+  env: NodeJS.ProcessEnv = process.env,
+  ahora: Date = new Date()
+): Promise<boolean> {
+  const vivas = { estado: { notIn: ["omitida", "fallida"] } };
+  const max = Number(env.STORY_ADS_MAX_TOTAL?.trim());
+  if (Number.isInteger(max) && max >= 0 && env.STORY_ADS_MAX_TOTAL?.trim()) {
+    if ((await tx.storyAdCampaign.count({ where: vivas })) >= max) return false;
+  }
+  const horas = Number(env.STORY_ADS_SEPARACION_HORAS?.trim());
+  if (Number.isFinite(horas) && horas > 0) {
+    const desde = new Date(ahora.getTime() - horas * 3_600_000);
+    if ((await tx.storyAdCampaign.count({ where: { ...vivas, createdAt: { gte: desde } } })) > 0) return false;
+  }
+  return true;
 }
 
 /** Valida los bytes por magic number (JPEG/PNG), no por Content-Type. */

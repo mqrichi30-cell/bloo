@@ -382,3 +382,25 @@ test("minimoDesdeError: título y monto separados, 'más de' estricto", async ()
     100000 // ₡901 + 10 % → ₡1.000
   );
 });
+
+test("hayLugarParaCampana: día de por medio y tope total", async () => {
+  const { hayLugarParaCampana } = await import("../lib/story-ads/process");
+  const filas: { estado: string; createdAt: Date }[] = [];
+  const tx = {
+    storyAdCampaign: {
+      count: async ({ where }: { where: { estado: { notIn: string[] }; createdAt?: { gte: Date } } }) =>
+        filas.filter((f) => !where.estado.notIn.includes(f.estado) && (!where.createdAt || f.createdAt >= where.createdAt.gte)).length,
+    },
+  } as never;
+  const env = { STORY_ADS_SEPARACION_HORAS: "36", STORY_ADS_MAX_TOTAL: "2" } as NodeJS.ProcessEnv;
+  const t0 = new Date("2026-10-11T01:00:00Z");
+  assert.equal(await hayLugarParaCampana(tx, env, t0), true);
+  filas.push({ estado: "activa", createdAt: t0 });
+  assert.equal(await hayLugarParaCampana(tx, env, new Date("2026-10-11T15:00:00Z")), false); // al día siguiente: no
+  assert.equal(await hayLugarParaCampana(tx, env, new Date("2026-10-12T15:00:00Z")), true); // pasado mañana: sí
+  filas.push({ estado: "fallida", createdAt: new Date("2026-10-12T15:00:00Z") }); // no gastó: no cuenta
+  assert.equal(await hayLugarParaCampana(tx, env, new Date("2026-10-12T16:00:00Z")), true);
+  filas.push({ estado: "terminada", createdAt: new Date("2026-10-12T16:00:00Z") });
+  assert.equal(await hayLugarParaCampana(tx, env, new Date("2026-10-20T16:00:00Z")), false); // tope 2
+  assert.equal(await hayLugarParaCampana(tx, {} as NodeJS.ProcessEnv, new Date("2026-10-12T17:00:00Z")), true); // sin env: libre
+});
