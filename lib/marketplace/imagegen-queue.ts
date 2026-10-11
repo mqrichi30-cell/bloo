@@ -72,8 +72,9 @@ export async function claimImages(limit: number): Promise<ClaimedImage[]> {
        AND t."id" IN (
          SELECT g."id" FROM ${SCHEMA}."GeneratedImage" g
           WHERE ${RECLAMABLE}
-          -- el hero primero: es el que destraba "listo para publicar"
-          ORDER BY (g."variant" = 'hero') DESC, g."createdAt" ASC
+          -- story primero (su par ya está publicado y la campaña espera la
+          -- imagen); después el hero, que destraba "listo para publicar"
+          ORDER BY (g."variant" = 'story') DESC, (g."variant" = 'hero') DESC, g."createdAt" ASC
           LIMIT ${limit}
           FOR UPDATE SKIP LOCKED
        )
