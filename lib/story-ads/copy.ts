@@ -11,14 +11,17 @@ export interface StoryCopy {
   headline: string;
 }
 
-export function storyCopy(m: { nombre: string; color: string | null; material: string | null }): StoryCopy {
+export function storyCopy(
+  m: { nombre: string; color: string | null; material: string | null },
+  destino: "instagram" | "whatsapp" = "instagram"
+): StoryCopy {
   const input = kitInputDe(m);
   const color = m.color?.trim() || null;
   const material = m.material?.trim() || null;
   const lineas = [
     `${m.nombre}${color ? ` · ${color}` : ""}. Made for sunny days.`,
     `${material ? `Marco de ${material}, con` : "Con"} estuche y paño bloo. ${formatPrecioKit(input.precioVentaCent)}.`,
-    "Desliza y escríbenos por WhatsApp.",
+    destino === "whatsapp" ? "Desliza y escríbenos por WhatsApp." : "Desliza y escríbenos por mensaje.",
   ];
   return { message: lineas.join("\n"), headline: `Lentes de sol bloo · ${m.nombre}`.slice(0, 60) };
 }

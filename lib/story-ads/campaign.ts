@@ -29,6 +29,7 @@ import type { StoryCopy } from "./copy";
 
 /** Destino de click-to-WhatsApp que documenta Meta para link_data. */
 export const WHATSAPP_LINK = "https://api.whatsapp.com/send";
+export const INSTAGRAM_LINK = "https://www.instagram.com/bloo_cr/";
 
 export interface CampanaRow {
   id: string;
@@ -183,7 +184,7 @@ export async function avanzarCampana(ctx: CampanaCtx): Promise<ResultadoCampana>
           end_time: fin.toISOString(),
           billing_event: "IMPRESSIONS",
           optimization_goal: "CONVERSATIONS",
-          destination_type: "WHATSAPP",
+          destination_type: ctx.seg.destino === "whatsapp" ? "WHATSAPP" : "INSTAGRAM_DIRECT",
           bid_strategy: "LOWEST_COST_WITHOUT_CAP",
           promoted_object: { page_id: ctx.cred.pageId },
           targeting: {
@@ -253,10 +254,13 @@ export async function avanzarCampana(ctx: CampanaCtx): Promise<ResultadoCampana>
         instagram_user_id: ig,
         link_data: {
           image_hash: r.metaImageHash,
-          link: WHATSAPP_LINK,
+          link: ctx.seg.destino === "whatsapp" ? WHATSAPP_LINK : INSTAGRAM_LINK,
           message: ctx.copy.message,
           name: ctx.copy.headline,
-          call_to_action: { type: "WHATSAPP_MESSAGE", value: { app_destination: "WHATSAPP" } },
+          call_to_action:
+            ctx.seg.destino === "whatsapp"
+              ? { type: "WHATSAPP_MESSAGE", value: { app_destination: "WHATSAPP" } }
+              : { type: "INSTAGRAM_MESSAGE", value: { app_destination: "INSTAGRAM_DIRECT" } },
         },
       },
     });

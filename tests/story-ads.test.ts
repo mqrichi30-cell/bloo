@@ -187,7 +187,7 @@ function ctxDe(g: MockGraph, row: CampanaRow, o: Partial<CampanaCtx> = {}) {
     cred: CRED,
     modoActual: row.modo,
     topeCrc: 2000,
-    seg: { ageMin: 18, ageMax: 45, countries: ["CR"] },
+    seg: { ageMin: 18, ageMax: 45, countries: ["CR"], destino: "whatsapp" },
     copy: { message: "m", headline: "h" },
     imagen: async () => Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0, 0, 0]),
     hayCupoHoy: async () => true,

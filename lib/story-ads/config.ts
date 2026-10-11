@@ -71,6 +71,9 @@ export interface Segmentacion {
   ageMin: number;
   ageMax: number;
   countries: string[];
+  /** A dónde lleva el botón: 'instagram' (DM a @bloo_cr) o 'whatsapp'
+   *  (exige WhatsApp Business en la Página). Env STORY_ADS_DESTINO. */
+  destino: "instagram" | "whatsapp";
 }
 
 /** Costa Rica, 18-45 por defecto (STORY_ADS_AGE_MIN / STORY_ADS_AGE_MAX). */
@@ -82,7 +85,8 @@ export function segmentacion(env: NodeJS.ProcessEnv = process.env): Segmentacion
   let ageMin = edad(env.STORY_ADS_AGE_MIN, 18);
   let ageMax = edad(env.STORY_ADS_AGE_MAX, 45);
   if (ageMin > ageMax) [ageMin, ageMax] = [18, 45];
-  return { ageMin, ageMax, countries: ["CR"] };
+  const destino = env.STORY_ADS_DESTINO?.trim().toLowerCase() === "whatsapp" ? "whatsapp" : "instagram";
+  return { ageMin, ageMax, countries: ["CR"], destino };
 }
 
 export interface MetaAdsCredenciales {

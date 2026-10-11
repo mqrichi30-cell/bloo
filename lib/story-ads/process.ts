@@ -316,7 +316,7 @@ export async function procesarStoryAds(opts: { deadline: number }): Promise<Resu
       modoActual: storyAdsMode(),
       topeCrc: topeCampanaCrc(),
       seg: segmentacion(),
-      copy: storyCopy(listing.model),
+      copy: storyCopy(listing.model, segmentacion().destino),
       imagen: () => descargarImagen(storyImg.publicUrl!),
       hayCupoHoy: async () =>
         (await prisma.storyAdCampaign.count({ where: { activadaAt: { gte: inicioDiaCR() }, id: { not: c.id } } })) < storyAdsMaxPorDia(),
