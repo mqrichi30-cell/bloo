@@ -113,12 +113,19 @@ function parseNumero(s: string): number | null {
  * número suelto podría ser cualquier cosa.
  */
 export function minimoDesdeError(textos: Array<string | null | undefined>): number | null {
+  // Meta parte el aviso: el título dice "Presupuesto demasiado bajo" y el
+  // mensaje trae el monto ("debe ser de más de ₡900"). La palabra clave se
+  // busca en el conjunto; el monto, en cada texto.
+  const todos = textos.filter(Boolean).join(" ");
+  if (!/m[ií]nim|minimum|too low|demasiado bajo|al menos|at least|m[aá]s de|more than|greater than/i.test(todos)) return null;
   for (const t of textos) {
-    if (!t || !/m[ií]nim|minimum|too low|demasiado bajo|al menos|at least/i.test(t)) continue;
+    if (!t) continue;
     const m = t.match(MONTO_RE);
     const n = m ? parseNumero(m[1] ?? m[2] ?? "") : null;
     if (n !== null && n > 0) {
-      const cent = Math.round(n * 100);
+      // "más de ₡900" = estrictamente mayor: el mínimo válido es ₡901.
+      const estricto = /(m[aá]s de|more than|greater than)\s*$/i.test(t.slice(0, m!.index ?? 0));
+      const cent = Math.round(n * 100) + (estricto ? 100 : 0);
       if (Number.isSafeInteger(cent)) return cent;
     }
   }

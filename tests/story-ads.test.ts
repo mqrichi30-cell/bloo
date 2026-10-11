@@ -370,3 +370,15 @@ test("sin tiempo en la corrida: corta antes de crear, sin gastar intento", async
   assert.equal(r.estado, "pendiente");
   assert.equal(g.posts().length, 0);
 });
+
+test("minimoDesdeError: título y monto separados, 'más de' estricto", async () => {
+  const { minimoDesdeError } = await import("../lib/story-ads/budget");
+  assert.equal(
+    minimoDesdeError([
+      "El presupuesto del conjunto de anuncios debe ser de más de ₡900. En caso contrario, es posible que los anuncios no se entreguen.",
+      "Presupuesto demasiado bajo",
+      "Invalid parameter",
+    ]),
+    90100
+  );
+});
