@@ -2,6 +2,14 @@
 
 Última actualización: 2026-09-24 ~00:10 CR (Jarvis). Leer SOLO esto para retomar.
 
+
+## 2026-10-11 — Historias pagadas (Jarvis) — LEER PRIMERO
+- En prod: story-ads (lib/story-ads, Netlify cada 15 min) + imagen story 9:16 + lente transparente. STORY_ADS_MODE=on, DESTINO=instagram (WhatsApp +506 8943 3677 es personal, Meta exige WhatsApp Business), SEPARACION_HORAS=36 (historia día de por medio; el par del medio NO lleva historia), MAX_TOTAL=5 (prueba). Presupuesto = mínimo Meta para mensajes (>₡900, flota) +10 % ≈ ₡1.100 + IVA.
+- Marketplace diario, precio MARKETPLACE_PRICE_CRC=18500 (Osa corregida a mano 11-oct). Inventario sync cada hora; 'quitar' primero en la cola.
+- GPT: tope 2/día (hero+story), OPENAI_WAIT_FOR_CAP=1 (sin respaldo cfedit). Ledger en Storage state/providers.json (openai_images.images).
+- BLOQUEADO: campaña de Osa (fila 'creando', nextAttemptAt +3 días) — token META_ADS_ACCESS_TOKEN no ve IG: Cris debe asignar perfil bloo_cr a system user bloo-ads + regenerar token con instagram_basic/instagram_manage_messages → .env.meta.local → netlify env:set → poner nextAttemptAt=now() y correr /api/cron/story-ads.
+- Pendiente aparte: workflow marketplace-inbox falla desde 10-oct tarde.
+
 ## 2026-09-27 — Puntos de venta + sesión permanente + susan/ashley (DEPLOYADO, commit 87fb7ab)
 - PuntoVenta (CRUD admin en `/puntos-venta`, link desde Perfil) + selector "¿Dónde se vendió?" en el flujo de venta (obligatorio solo si hay ≥1 punto activo) + se muestra en el historial junto a medio de pago y vendedor.
 - Sesión permanente por dispositivo: sin timeout de inactividad/absoluto; `User.sessionVersion` invalida sesiones ya abiertas (ver `lib/require-session.ts`, Node runtime — NO en `middleware.ts`, Edge Runtime sin Prisma). Fuerza cierre: `node scripts/2026-09-27-forzar-cierre-sesion.mjs <username> --apply`.
