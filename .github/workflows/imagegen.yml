@@ -97,6 +97,7 @@ jobs:
           OPENAI_IMAGE_MODEL: ${{ vars.OPENAI_IMAGE_MODEL }} # default gpt-image-2.5-sunburst
           OPENAI_IMAGE_QUALITY: ${{ vars.OPENAI_IMAGE_QUALITY }} # default max (400 on quality -> xhigh -> high, unbilled)
           OPENAI_MAX_IMAGES_PER_DAY: ${{ vars.OPENAI_MAX_IMAGES_PER_DAY }} # default 30 (spend cap, not a delay)
+          OPENAI_WAIT_FOR_CAP: "1" # hero/story wait for GPT next UTC day instead of cfedit (Cris 2026-10-11)
           IMAGEGEN_REMBG_MODEL: ${{ vars.IMAGEGEN_REMBG_MODEL }}
           HF_SPACE_DISABLED: ${{ vars.HF_SPACE_DISABLED }}
           MAX_JOBS: ${{ github.event.inputs.max_jobs || '30' }}

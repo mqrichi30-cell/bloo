@@ -204,6 +204,15 @@ def gpt_usable(gpt: OpenAIEdit | None, variant: str, image_id: str | None, revie
     return ""
 
 
+def gpt_wait(skip: str) -> dict[str, Any] | None:
+    """OPENAI_WAIT_FOR_CAP=1 (Cris 2026-10-11): GPT is the only renderer for hero/story. When the
+    daily cap is used up (or the provider is benched/out of credit) the job waits for the next
+    UTC day instead of falling back to the free cfedit. No attempt is burned."""
+    if skip == "daily cap reached or provider benched" and env("OPENAI_WAIT_FOR_CAP", "0") == "1":
+        return _quota_wait(_next_utc_midnight(), "gpt " + skip)
+    return None
+
+
 def gpt_scene(cut: Image.Image, gpt: OpenAIEdit, reviewer: VisionReviewer,
               image_id: str | None = None) -> tuple[dict[str, Image.Image] | None, dict[str, Any]]:
     """Paid route: ONE GPT Image call (EDIT_PROMPTS['hero'] as is), then the free checks of the edit
@@ -399,6 +408,8 @@ def process_story(job: Job, src: Image.Image, cut: Image.Image, local: dict[str,
     """Story job: one paid GPT call, then the free cfedit; never the plate composite."""
     gmeta: dict[str, Any] | None = None
     skip = gpt_usable(gpt, STORY, job.image_id, reviewer, state)
+    if (wait := gpt_wait(skip)) is not None:
+        return wait
     if not skip and gpt is not None and reviewer is not None:
         story, gmeta = gpt_story(cut, gpt, reviewer, job.image_id)
         if story is not None:
@@ -444,6 +455,9 @@ def process_job(job: Job, pool: PlatePool, storage: Storage,
                 editor: CloudflareEdit | None = None, reviewer: VisionReviewer | None = None,
                 gpt: OpenAIEdit | None = None, state: dict[str, Any] | None = None) -> dict[str, Any]:
     variant = job.variant if job.variant in VARIANTS else "hero"
+    # before the cut-out: a job that must wait for GPT costs no rembg/Cloudflare time
+    if (wait := gpt_wait(gpt_usable(gpt, variant, job.image_id, reviewer, state))) is not None:
+        return wait
     src = load_source(job.source_url)
     cut, hand = cut_out(src)
     if hand.has_hand:
@@ -454,6 +468,8 @@ def process_job(job: Job, pool: PlatePool, storage: Storage,
 
     gmeta: dict[str, Any] | None = None
     skip = gpt_usable(gpt, variant, job.image_id, reviewer, state)
+    if (wait := gpt_wait(skip)) is not None:
+        return wait
     if not skip and gpt is not None and reviewer is not None:
         gouts, gmeta = gpt_scene(cut, gpt, reviewer, job.image_id)
         if gouts is not None:
