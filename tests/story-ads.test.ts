@@ -79,8 +79,8 @@ test("presupuesto: moneda distinta o mínimo inválido → no se crea", () => {
 });
 
 test("mínimo desde el error de Meta", () => {
-  assert.equal(minimoDesdeError(["Your budget is too low. The minimum budget is ₡930."]), 93_000);
-  assert.equal(minimoDesdeError(["El presupuesto mínimo es CRC 1.860"]), 186_000);
+  assert.equal(minimoDesdeError(["Your budget is too low. The minimum budget is ₡930."]), 110_000); // +10 % → ₡1.100
+  assert.equal(minimoDesdeError(["El presupuesto mínimo es CRC 1.860"]), 210_000);
   assert.equal(minimoDesdeError(["Invalid parameter"]), null);
   assert.equal(minimoDesdeError(["minimum is 930"]), null); // sin moneda: no se adivina
 });
@@ -332,7 +332,7 @@ test("Meta rechaza por presupuesto bajo: reintenta UNA vez con su mínimo si cab
   const r = await avanzarCampana(ctx);
   assert.equal(r.estado, "dry");
   assert.equal(n, 2);
-  assert.ok(guardados.some((p) => p.presupuestoCent === 93_000));
+  assert.ok(guardados.some((p) => p.presupuestoCent === 110_000));
 });
 
 test("Meta exige un mínimo sobre el tope en el error → fallida, sin activar", async () => {
@@ -379,6 +379,6 @@ test("minimoDesdeError: título y monto separados, 'más de' estricto", async ()
       "Presupuesto demasiado bajo",
       "Invalid parameter",
     ]),
-    90100
+    100000 // ₡901 + 10 % → ₡1.000
   );
 });

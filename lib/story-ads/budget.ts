@@ -125,7 +125,10 @@ export function minimoDesdeError(textos: Array<string | null | undefined>): numb
     if (n !== null && n > 0) {
       // "más de ₡900" = estrictamente mayor: el mínimo válido es ₡901.
       const estricto = /(m[aá]s de|more than|greater than)\s*$/i.test(t.slice(0, m!.index ?? 0));
-      const cent = Math.round(n * 100) + (estricto ? 100 : 0);
+      // +10 % y redondeo a ₡100: el mínimo en colones flota con el tipo de
+      // cambio (₡900 → ₡915 en minutos) y un reintento justo vuelve a fallar.
+      const base = Math.round(n * 100) + (estricto ? 100 : 0);
+      const cent = Math.ceil((base * 1.1) / 10000) * 10000;
       if (Number.isSafeInteger(cent)) return cent;
     }
   }
