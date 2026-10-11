@@ -1,4 +1,4 @@
-// Netlify Scheduled Function — loop diario de Marketplace. Pega a
+// Netlify Scheduled Function — loop horario de Marketplace. Pega a
 // /api/cron/marketplace-sync, que compara inventario contra publicaciones
 // (crea las nuevas, encola imágenes IA, avisa agotados). Ver
 // lib/marketplace/sync.ts.
@@ -25,5 +25,6 @@ export default async () => {
   return new Response("ok");
 };
 
-// 13:00 UTC todos los días = 7:00 hora CR (UTC−6, sin horario de verano).
-export const config = { schedule: "0 13 * * *" };
+// Cada hora en punto (antes 1 vez al día): así un par agotado se detecta en
+// <1 h y el dispatcher de :05 ya ve el 'quitar' en la cola.
+export const config = { schedule: "0 * * * *" };

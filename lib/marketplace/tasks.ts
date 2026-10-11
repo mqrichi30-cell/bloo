@@ -496,7 +496,7 @@ export async function reclamarSiguiente(): Promise<{
           WHERE q."status" = 'pendiente' AND q."attempts" < ${ROBOT_MAX_ATTEMPTS}
             AND NOT ${esperandoFoto(estucheOk)}
             AND (${!soloQuitar} OR q."action" = 'quitar')
-          ORDER BY q."createdAt" ASC, q."id" ASC
+          ORDER BY (q."action" = 'quitar') DESC, q."createdAt" ASC, q."id" ASC
           LIMIT 1
           FOR UPDATE SKIP LOCKED
        )
