@@ -197,6 +197,11 @@ def gpt_usable(gpt: OpenAIEdit | None, variant: str, image_id: str | None, revie
         return "hero/story only"
     if not gpt.available():
         return "daily cap reached or provider benched"
+    # Cris 2026-10-14: 1 GPT/día para la foto de Marketplace y 1 reservada para la
+    # historia del par del día (que nace a las 7am CR, cuando la cola de heroes ya corrió).
+    spent = getattr(gpt, "spent_today", lambda: 0)()
+    if variant != STORY and spent >= max(1, openai_daily_cap() - 1):
+        return "daily cap reached or provider benched"
     if gpt.already_paid(image_id):
         return "already had its paid call"
     if not review_available(reviewer, state):
