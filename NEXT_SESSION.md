@@ -4,6 +4,7 @@
 
 
 ## 2026-10-11 — Historias pagadas (Jarvis) — LEER PRIMERO
+- 2026-10-14: verificación negocio REENVIADA (nombre legal exacto Hacienda + constancia RUT Hacienda con tel 89433677 + RNP; SMS confirmado) → API verification_status='pending'. Al pasar a 'verified': publicar app 3501199170061861 (tarea diaria 10am lo hace). 3 pares faltantes (Malinche Té, Chirripó Té Claro, Celaje Verde) re-encolados 'publicar' al frente.
 - 2026-10-12: sesión FB vencida 7:05 → Uvita falló y robot+inbox se pausaron. Cris renovó sesión (capture-session), Uvita publicada 18:00 CR con pauta, inbox reactivado. Robot publica a hora fija ROBOT_PUBLISH_HORA_CR=7. Verificación negocio Meta = pending_need_more_info (faltan datos legales BlackHawk en Información del negocio; Cris). Hasta publicar la app, las historias por API fallan sin gastar → armar a mano en Ads Manager.
 - En prod: story-ads (lib/story-ads, Netlify cada 15 min) + imagen story 9:16 + lente transparente. STORY_ADS_MODE=on, DESTINO=instagram (WhatsApp +506 8943 3677 es personal, Meta exige WhatsApp Business), SEPARACION_HORAS=36 (historia día de por medio; el par del medio NO lleva historia), MAX_TOTAL=5 (prueba). Presupuesto = mínimo Meta para mensajes (>₡900, flota) +10 % ≈ ₡1.100 + IVA.
 - Marketplace diario, precio MARKETPLACE_PRICE_CRC=18500 (Osa corregida a mano 11-oct). Inventario sync cada hora; 'quitar' primero en la cola.
