@@ -7,7 +7,7 @@
 //   - Pantalla de agregar tarjeta/método de pago, checkpoint o 2FA → no se ingresa nada → "fallido".
 //   - Esta función NUNCA lanza: siempre devuelve un BoostResult (la publicación ya quedó hecha).
 import { assertNoCheckpoint } from "./checkpoint.mjs";
-import { firstVisible, go, optionLocators, typeInto } from "./facebook.mjs";
+import { firstVisible, go, itemShowsTitle, optionLocators, typeInto } from "./facebook.mjs";
 import { log, pause, safeUrl, shortError } from "./util.mjs";
 
 /** Tope duro del robot (además del tope diario del servidor). Nunca se paga más que esto. */
@@ -298,7 +298,7 @@ export const totalPermitido = (t, amountCrc) =>
  * @param {Page} page
  * @param {string} listingUrl
  * @param {Boost} cfg
- * @param {{onEvidence?: EvidenceFn, deadline?: number}} [opts]
+ * @param {{onEvidence?: EvidenceFn, deadline?: number, expectedTitle?: string}} [opts]
  * @returns {Promise<BoostResult>}
  */
 export async function promocionar(page, listingUrl, cfg, opts = {}) {
@@ -319,6 +319,10 @@ export async function promocionar(page, listingUrl, cfg, opts = {}) {
   if (amountCrc > MAX_BOOST_CRC) return res("fallido", `monto ₡${amountCrc} supera el tope del robot`);
   try {
     await go(p, listingUrl);
+    // Nunca pagar la pauta de otra publicación: el ítem debe mostrar el título esperado.
+    if (opts.expectedTitle && !(await itemShowsTitle(p, opts.expectedTitle))) {
+      return await fail(`la URL no muestra "${opts.expectedTitle}"; no se pautó para no pagar otra publicación`);
+    }
     if (isAlreadyPromoted(await bodyText(p))) {
       log("pauta: la publicación ya estaba promocionada; no se repite");
       return cfg.mode === "on" ? res("pagado", "ya estaba promocionada (no se volvió a pagar)") : res("omitido", "ya estaba promocionada");

@@ -118,6 +118,19 @@ export const cleanTitle = (s) => String(s || "").replace(/ /g, " ").replace(/\s
  * @param {Page} page @param {string} title
  * @returns {Promise<{ids: string[], orphanCount: number}>}
  */
+/**
+ * ¿La página del ítem abierta muestra este título? (2026-10-14: tras publicar,
+ * Facebook dejó la pestaña en OTRA publicación — Corobicí — y el robot tomó su
+ * URL como la nueva). Compara el título limpio sin el "…" final del recorte.
+ * @param {import('playwright').Page} page @param {string} title
+ */
+export async function itemShowsTitle(page, title) {
+  const want = cleanTitle(title).replace(/…$/, "").trim().toLowerCase();
+  if (!want) return false;
+  const text = cleanTitle(await page.locator("body").innerText({ timeout: 10_000 }).catch(() => "")).toLowerCase();
+  return text.includes(want);
+}
+
 export async function scanExactTitle(page, title) {
   return page.evaluate((want) => {
     const clean = (/** @type {any} */ s) => String(s || "").replace(/ /g, " ").replace(/\s+/g, " ").trim();
@@ -503,6 +516,10 @@ export async function publicar(page, task, files, opts = {}) {
   await assertNoCheckpoint(page);
 
   let externalUrl = normalizeItemUrl(page.url(), base);
+  if (externalUrl && !(await itemShowsTitle(page, kit.title))) {
+    log(`la pestaña quedó en otra publicación (${safeUrl(externalUrl)}); busco la nueva por título`);
+    externalUrl = null;
+  }
   if (!externalUrl) {
     externalUrl = await findListingUrl(page, kit.title, base, { exclude: prior }).catch((e) => {
       if (e?.name === "CheckpointError") throw e;

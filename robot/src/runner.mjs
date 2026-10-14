@@ -20,7 +20,7 @@ export const BOOST_MIN_MS = 150_000;
  * @param {import('playwright').Page} page @param {string|null} url @param {any} rawBoost @param {RunOpts} opts
  * @returns {Promise<import('./api.mjs').BoostResult|undefined>}
  */
-async function boostAfter(page, url, rawBoost, opts) {
+async function boostAfter(page, url, rawBoost, opts, expectedTitle) {
   const parsed = parseBoostConfig(rawBoost);
   if (!parsed) return undefined;
   if (!parsed.ok) return { status: "fallido", amountCrc: parsed.amountCrc, detail: parsed.detail };
@@ -29,7 +29,7 @@ async function boostAfter(page, url, rawBoost, opts) {
   if (opts.deadline && opts.deadline - Date.now() < BOOST_MIN_MS) {
     return { status: "omitido", amountCrc: cfg.amountCrc, detail: "Sin tiempo suficiente en esta corrida (timeout 12 min)" };
   }
-  return promocionar(page, url, cfg, { onEvidence: opts.onEvidence, deadline: opts.deadline });
+  return promocionar(page, url, cfg, { onEvidence: opts.onEvidence, deadline: opts.deadline, expectedTitle });
 }
 
 /**
@@ -58,7 +58,7 @@ export async function runTask(page, task, opts = {}) {
     const result = r.externalUrl
       ? { status: "hecha", externalUrl: r.externalUrl }
       : { status: "hecha", error: "Publicada, pero no ubiqué la URL en Tus publicaciones" };
-    const boost = await boostAfter(page, r.externalUrl, task.boost, opts);
+    const boost = await boostAfter(page, r.externalUrl, task.boost, opts, task.kit?.title);
     if (boost) {
       result.boost = boost;
       log(`pauta: ${boost.status}${boost.detail ? ` (${boost.detail})` : ""}`);
