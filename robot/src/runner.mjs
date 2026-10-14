@@ -2,7 +2,7 @@
 // Orquesta UNA tarea ya reclamada sobre una página abierta y devuelve el reporte para el panel.
 // Separado de run.mjs (API, navegador, secretos) para poder probarlo contra el stub local.
 import { parseBoostConfig, promocionar } from "./boost.mjs";
-import { publicar, quitar, reemplazar } from "./facebook.mjs";
+import { eliminarVieja, publicar, quitar, reemplazar } from "./facebook.mjs";
 import { log } from "./util.mjs";
 
 /** Tiempo mínimo que debe quedar en la corrida para intentar la pauta (abrir + 2 pantallas + verificar). */
@@ -62,6 +62,10 @@ export async function runTask(page, task, opts = {}) {
     if (boost) {
       result.boost = boost;
       log(`pauta: ${boost.status}${boost.detail ? ` (${boost.detail})` : ""}`);
+    }
+    // Reemplazo: la vieja (ya agotada) se elimina para que no se vea "vendida" (Cris 2026-10-14).
+    if (task.action === "reemplazar" && "oldUrl" in r && r.oldUrl && r.externalUrl && r.oldUrl !== r.externalUrl) {
+      log(`vieja: ${await eliminarVieja(page, r.oldUrl, task.oldTitle || task.kit?.title || "", flow)}`);
     }
     return result;
   }

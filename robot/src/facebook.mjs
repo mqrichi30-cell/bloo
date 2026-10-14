@@ -599,19 +599,33 @@ export async function quitar(page, task, opts = {}) {
   }
 
   // Fallback: eliminar
-  const more = await firstVisible(
-    [page.getByRole("button", { name: /^(Más|Más opciones|More|Opciones)$/i }), page.getByLabel(/^(Más|Más opciones)$/i)],
-    8000
-  );
-  if (!more) throw new Error('No encontré "Marcar como agotado" ni el menú para eliminar');
-  await more.click();
-  await pause();
-  const del = await firstVisible([page.getByRole("menuitem", { name: /Eliminar/i }), page.getByText(/^Eliminar( publicaci[oó]n)?$/i)], 8000);
-  if (!del) throw new Error('No encontré la opción "Eliminar"');
+  if (opts.dryRun && !(await deleteMenuReachable(page))) throw new Error('No encontré "Marcar como agotado" ni el menú para eliminar');
   if (opts.dryRun) {
     log('dry-run: encontré "Eliminar", NO se hizo clic');
     return { method: "dry-run", url };
   }
+  await deleteOpenListing(page);
+  return { method: "eliminado", url };
+}
+
+/** ¿Está el menú "Más" con "Eliminar" en la publicación abierta? (solo dry-run) @param {Page} page */
+async function deleteMenuReachable(page) {
+  return Boolean(
+    await firstVisible([page.getByRole("button", { name: /^(Más|Más opciones|More|Opciones)$/i }), page.getByLabel(/^(Más|Más opciones)$/i)], 8000)
+  );
+}
+
+/** Elimina la publicación abierta en `page` (menú Más → Eliminar → confirmar). @param {Page} page */
+async function deleteOpenListing(page) {
+  const more = await firstVisible(
+    [page.getByRole("button", { name: /^(Más|Más opciones|More|Opciones)$/i }), page.getByLabel(/^(Más|Más opciones)$/i)],
+    8000
+  );
+  if (!more) throw new Error('No encontré el menú para eliminar');
+  await more.click();
+  await pause();
+  const del = await firstVisible([page.getByRole("menuitem", { name: /Eliminar/i }), page.getByText(/^Eliminar( publicaci[oó]n)?$/i)], 8000);
+  if (!del) throw new Error('No encontré la opción "Eliminar"');
   await del.click();
   await pause();
   const confirm = await firstVisible([page.getByRole("dialog").getByRole("button", { name: /^Eliminar$/i })], 8000);
@@ -619,7 +633,32 @@ export async function quitar(page, task, opts = {}) {
   await confirm.click();
   await pause(2000, 4000);
   await assertNoCheckpoint(page);
-  return { method: "eliminado", url };
+}
+
+/**
+ * Cris 2026-10-14: tras un reemplazo exitoso, la publicación vieja (ya marcada agotada) se
+ * ELIMINA para que los compradores no vean un par "vendido" que sí hay. Solo por URL conocida,
+ * solo si muestra el título esperado y ya está agotada (nunca una activa). Nunca lanza.
+ * @param {Page} page @param {string} oldUrl @param {string} title @param {FlowOpts} [opts]
+ * @returns {Promise<string>} resultado legible
+ */
+export async function eliminarVieja(page, oldUrl, title, opts = {}) {
+  try {
+    const base = opts.base || FB_BASE;
+    const url = normalizeItemUrl(oldUrl, base);
+    if (!url) return "sin URL de la vieja";
+    await go(page, url);
+    if (!(await itemShowsTitle(page, title))) return "la URL no muestra el título; no se eliminó";
+    if (!(await firstVisible([page.getByRole("button", { name: /Marcar como disponible/i })], 5000))) {
+      return "la vieja no está agotada; no se eliminó";
+    }
+    if (opts.dryRun) return "dry-run: no se eliminó";
+    await deleteOpenListing(page);
+    return "eliminada";
+  } catch (e) {
+    if (e?.name === "CheckpointError") throw e;
+    return `no se pudo eliminar: ${e instanceof Error ? e.message : e}`;
+  }
 }
 
 /** id numérico de una URL de publicación. @param {string|null|undefined} url */
