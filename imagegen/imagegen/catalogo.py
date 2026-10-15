@@ -33,7 +33,7 @@ from .util import env, log, setup_logging
 
 ROOT = Path(__file__).resolve().parents[2]          # C:\bloo
 LOCAL = ROOT / "catalogo"
-PDF_NAME = "catalogo-bloo-2026-10.pdf"
+PDF_NAME = "catalogo-bloo-2026-10.pdf"  # override con --nombre
 OUT_DRY = Path(__file__).resolve().parents[1] / "out"
 BUCKET = "bloo-marketing"
 NAVY, CREAM, DUSTY = (11, 14, 48), (229, 225, 208), (128, 167, 182)
@@ -170,16 +170,24 @@ def centered(d: ImageDraw.ImageDraw, y: int, text: str, f: Any, fill: tuple[int,
 
 
 def cover(items: list[Item], price: int) -> Image.Image:
-    """Portada: solo el logo de bloo centrado sobre navy (color de marca)."""
-    pg = Image.new("RGB", PAGE, NAVY)
-    lg = logo(760, CREAM)
+    """Portada: mar azul navy HD (catalogo/assets/portada-mar.png) con el logo pequeño al centro."""
+    sea = LOCAL / "assets" / "portada-mar.png"
+    if sea.exists():
+        bg = Image.open(sea).convert("RGB")
+        r = max(PAGE[0] / bg.width, PAGE[1] / bg.height)
+        bg = bg.resize((round(bg.width * r), round(bg.height * r)), Image.LANCZOS)
+        x, y = (bg.width - PAGE[0]) // 2, (bg.height - PAGE[1]) // 2
+        pg = bg.crop((x, y, x + PAGE[0], y + PAGE[1]))
+    else:
+        pg = Image.new("RGB", PAGE, NAVY)
+    lg = logo(420, CREAM)
     if lg is not None:
         pg.paste(lg, ((PAGE[0] - lg.width) // 2, (PAGE[1] - lg.height) // 2), lg)
     else:
         d = ImageDraw.Draw(pg)
-        f = font(240, True)
+        f = font(150, True)
         w = d.textlength("bloo", font=f)
-        d.text(((PAGE[0] - w) / 2, PAGE[1] / 2 - 140), "bloo", font=f, fill=CREAM)
+        d.text(((PAGE[0] - w) / 2, PAGE[1] / 2 - 90), "bloo", font=f, fill=CREAM)
     return pg
 
 
@@ -218,15 +226,6 @@ def color_page(i: Item, price: int, n: int, total: int) -> Image.Image:
         y += 62
     d.text((70, y + 4), fmt_crc(price), font=font(52, True), fill=NAVY)
     y += 80
-    plan = fmt_day(i.plan) if i.plan[:2] == "20" else i.plan
-    d.text((70, y), "Publicación:", font=font(34), fill=NAVY)
-    d.text((300, y), plan, font=font(34, True), fill=NAVY)
-    y += 60
-    label = "publicado" if i.publicado else "por publicar"
-    f_chip = font(32, True)
-    w = d.textlength(label, font=f_chip)
-    d.rounded_rectangle((70, y, 70 + w + 60, y + 60), radius=30, fill=DUSTY)
-    d.text((100, y + 12), label, font=f_chip, fill=NAVY)
     return pg
 
 
@@ -309,8 +308,12 @@ def main(argv: list[str] | None = None) -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dry-run", action="store_true", help="offline mock PDF into imagegen/out/")
     ap.add_argument("--start", default="2026-10-15", help="first daily slot (CR date)")
+    ap.add_argument("--nombre", default=None, help="nombre del PDF (ej. catalogo-bloo-parte-1.pdf)")
     a = ap.parse_args(argv)
     setup_logging()
+    global PDF_NAME
+    if a.nombre:
+        PDF_NAME = a.nombre
     return run_dry() if a.dry_run else run_live(date.fromisoformat(a.start))
 
 
