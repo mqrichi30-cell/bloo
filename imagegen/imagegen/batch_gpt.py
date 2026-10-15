@@ -123,6 +123,7 @@ class Target:
     rows: dict[str, str] = field(default_factory=dict)       # variant -> GeneratedImage id
     results: dict[str, str] = field(default_factory=dict)    # variant -> lista | rechazada:<why> | ...
     task: str = ""
+    defects: list[str] = field(default_factory=list)  # last hard defects: fed into the retry prompt
 
 
 def fetch_targets(conn: Any) -> list[Target]:
@@ -456,7 +457,7 @@ def render(variant: str, cut: Any, src: Any, t: Target, gpt: BatchGPT, reviewer:
     """One color+variant (caller holds CPU): GPT render + gates, auto-correct retry, upload."""
     image_id = t.rows[variant]
     job = Job(image_id, t.model_id, t.nombre, t.color, variant, t.source_url)
-    defects: list[str] = []
+    defects: list[str] = list(t.defects)  # --retry-failed: start from the previous defects
     hint = ""
     metas: list[dict[str, Any]] = []
     _ctx.variant = variant
@@ -469,7 +470,7 @@ def render(variant: str, cut: Any, src: Any, t: Target, gpt: BatchGPT, reviewer:
             metas.append({"why": "AI review budget (Cloudflare neurons) spent"})
             break
         _ctx.correction = attempt > 0
-        prompt = correction_prompt(variant, defects, hint) if attempt else None
+        prompt = correction_prompt(variant, defects, hint) if defects else None
         pid = image_id if attempt == 0 else f"{image_id}:fix{attempt}"
         if variant == STORY:
             frame, meta = gpt_story(cut, gpt, reviewer, pid, prompt)
@@ -489,6 +490,8 @@ def render(variant: str, cut: Any, src: Any, t: Target, gpt: BatchGPT, reviewer:
                 return _upload(job, variant, outs["1x1"], outs["4x5"], storage, qa, gpt.label)
             meta.update(rejected=True, hard=sorted(failed))
         defects, hint = _hard_and_hint(meta)
+        if defects:
+            t.defects = defects
         if not defects:  # API/quota/budget failure: a correction prompt would not help
             break
     why = next((str(m.get("why")) for m in reversed(metas) if m.get("why")), "batch stopped")
@@ -559,6 +562,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="colors in flight; OpenAI requests capped by the account's RPM header / 429s")
     ap.add_argument("--tries", type=int, default=2, help="GPT calls per image: 1 + auto-corrections")
     ap.add_argument("--limit", type=int, default=0, help="only the first N colors (0 = all)")
+    ap.add_argument("--retry-failed", action="store_true",
+                    help="colors whose new hero is not 'lista': new row + new render, prompt with the last defects")
     a = ap.parse_args(argv)
     setup_logging()
     load_env_local()
@@ -577,6 +582,13 @@ def main(argv: list[str] | None = None) -> int:
     targets += [t for lid, t in done.items() if lid not in {x.listing_id for x in fresh}]
     if done:
         log.info("state: %d colors already started, %d new", len(done), len(new))
+    if a.retry_failed:
+        for t in targets:
+            for v in VARIANTS:
+                if v in t.results and t.results[v] != "lista":
+                    t.results.pop(v)
+                    t.rows.pop(v, None)
+        log.info("retry: %d colors without a new hero", sum("hero" not in t.results for t in targets))
     first = {v: sum(1 for t in targets if v not in t.results) for v in VARIANTS}
     est = sum(n * EST_USD[v] for v, n in first.items())
     plan = {"colors": len(targets), "calls": first, "estimate_usd": round(est, 2), "cap_usd": a.budget_usd,
@@ -642,7 +654,7 @@ def main(argv: list[str] | None = None) -> int:
                "paid_calls_this_run": len(budget.calls) - calls_before, "tasks": {f"{t.nombre} · {t.color}": t.task for t in targets}}
     (OUT / "result.json").write_text(json.dumps(summary, indent=1, ensure_ascii=False), encoding="utf-8")
     log.info("DONE: hero lista %d, story lista %d, failed %d, spent US$%.4f of %.2f -> %s",
-             ok["hero"], ok[STORY], len(failed), budget.spent, budget.cap, OUT / "result.json")
+             ok.get("hero", 0), ok.get(STORY, 0), len(failed), budget.spent, budget.cap, OUT / "result.json")
     return 0
 
 

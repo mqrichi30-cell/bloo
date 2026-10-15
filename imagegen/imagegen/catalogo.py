@@ -232,6 +232,10 @@ def color_page(i: Item, price: int, n: int, total: int) -> Image.Image:
     d.text((70, y), "Publicación:", font=font(34), fill=NAVY)
     d.text((300, y), plan, font=font(34, True), fill=NAVY)
     y += 60
+    foto = "nueva (GPT, lote oct-2026)" if (i.hero or {}).get("batch") else "anterior (falta regenerar)"
+    d.text((70, y - 4), "Foto:", font=font(30), fill=NAVY)
+    d.text((300, y - 4), foto, font=font(30), fill=NAVY)
+    y += 56
     label = "publicado" if i.publicado else "por publicar"
     f_chip = font(32, True)
     w = d.textlength(label, font=f_chip)
