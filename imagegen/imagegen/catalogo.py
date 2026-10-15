@@ -229,10 +229,40 @@ def color_page(i: Item, price: int, n: int, total: int) -> Image.Image:
     return pg
 
 
+FULL = False  # --estilo completo: una foto por hoja, sin marco, precio mínimo en una esquina
+
+
+def full_page(i: Item, price: int) -> Image.Image:
+    """Hoja = la foto completa (4:5) a sangre, precio pequeño y discreto abajo a la derecha."""
+    raw = i.files.get("hero-4x5.jpg") or i.files.get("hero.jpg")
+    pg = Image.open(io.BytesIO(raw)).convert("RGB")
+    W = 1600
+    pg = pg.resize((W, round(pg.height * W / pg.width)), Image.LANCZOS)
+    d = ImageDraw.Draw(pg, "RGBA")
+    f = font(30)
+    t = fmt_crc(price)
+    w = d.textlength(t, font=f)
+    d.text((pg.width - w - 44, pg.height - 70), t, font=f, fill=(245, 242, 232, 150))
+    return pg
+
+
+def full_cover(size: tuple[int, int]) -> Image.Image:
+    global PAGE
+    old, PAGE = PAGE, size
+    try:
+        return cover([], 0)
+    finally:
+        PAGE = old
+
+
 def write_pdf(items: list[Item], price: int, path: Path) -> Path:
     # Solo colores con foto nueva aprobada: sin página vacía mientras se rehace una foto.
     items = [i for i in items if i.hero and i.hero.get("url")]
-    pages = [cover(items, price)] + [color_page(i, price, k, len(items)) for k, i in enumerate(items, 1)]
+    if FULL:
+        body = [full_page(i, price) for i in items]
+        pages = [full_cover(body[0].size if body else PAGE)] + body
+    else:
+        pages = [cover(items, price)] + [color_page(i, price, k, len(items)) for k, i in enumerate(items, 1)]
     path.parent.mkdir(parents=True, exist_ok=True)
     pages[0].save(path, "PDF", save_all=True, append_images=pages[1:], resolution=150.0, quality=88)
     return path
@@ -309,9 +339,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--dry-run", action="store_true", help="offline mock PDF into imagegen/out/")
     ap.add_argument("--start", default="2026-10-15", help="first daily slot (CR date)")
     ap.add_argument("--nombre", default=None, help="nombre del PDF (ej. catalogo-bloo-parte-1.pdf)")
+    ap.add_argument("--estilo", choices=["fichas", "completo"], default="fichas",
+                    help="completo = una foto por hoja sin marco, precio mínimo en una esquina")
     a = ap.parse_args(argv)
     setup_logging()
-    global PDF_NAME
+    global PDF_NAME, FULL
+    FULL = a.estilo == "completo"
     if a.nombre:
         PDF_NAME = a.nombre
     return run_dry() if a.dry_run else run_live(date.fromisoformat(a.start))
