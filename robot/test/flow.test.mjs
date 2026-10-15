@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { launch } from "../src/browser.mjs";
-import { publicar, quitar, reemplazar } from "../src/facebook.mjs";
+import { eliminar, publicar, quitar, reemplazar } from "../src/facebook.mjs";
 import { promocionar } from "../src/boost.mjs";
 import { runTask } from "../src/runner.mjs";
 import { CheckpointError, NeedsHumanError } from "../src/checkpoint.mjs";
@@ -26,6 +26,8 @@ const NEW_R = "Lentes de sol bloo · Tamarindo · Carey · Café Degradado";
 const CHI_CLARO = "Lentes de sol bloo · Chirripó · Té Claro · Polvos";
 const CHI_SECO = "Lentes de sol bloo · Chirripó · Té · Seco";
 const DIALOG_CARDS = new Set(["901", "902"]);
+const PALMAR = "Lentes de sol bloo · Palmar · Negro · Gris";
+const deleted = []; // POST /__deleted/<id>: cada uno borraría una publicación real
 const sellingUrls = [];
 const DESC =
   Array.from({ length: 12 }, (_, i) => `Línea ${i + 1}: acetato pulido, protección UV400, estuche incluido. ₡`).join("\n") +
@@ -44,6 +46,8 @@ const resetListings = () => {
     ["800", OLD_R],
     ["901", CHI_CLARO], // más nueva: arriba
     ["902", CHI_SECO],
+    ["910", PALMAR],
+    ["911", PALMAR + " Claro"], // mismo prefijo: nunca se borra con PALMAR
   ]);
 };
 
@@ -69,8 +73,14 @@ d.querySelector("span").textContent=T[id];document.body.appendChild(d);}
 const itemHtml = (id) => `<!doctype html><html lang="es"><body><h1><span>${listings.get(id) || "?"}</span></h1>
 <button id="m">${sold.includes(id) ? "Marcar como disponible" : "Marcar como agotado"}</button>
 <div role="dialog" id="d" hidden><p>¿Marcar como agotado?</p><button id="c">Confirmar</button></div>
+<button aria-label="Más opciones" id="mas">…</button>
+<div role="menu" id="menu" hidden><div role="menuitem" id="del">Eliminar publicación</div></div>
+<div role="dialog" id="dd" hidden><p>¿Eliminar publicación?</p><button id="ok">Eliminar</button></div>
 <script>
 m.onclick=()=>{d.hidden=false};
+mas.onclick=()=>{menu.hidden=false};
+del.onclick=()=>{menu.hidden=true; dd.hidden=false};
+ok.onclick=()=>{dd.remove(); fetch('/__deleted/${id}',{method:'POST'})};
 c.onclick=()=>{d.remove(); m.textContent='Marcar como disponible'; fetch('/__sold/${id}',{method:'POST'})};
 window.ITEM_ID=${JSON.stringify(id)}; window.BOOST_SCENARIO=${JSON.stringify(boostScenario)};
 </script>
@@ -101,6 +111,11 @@ before(async () => {
           listings.set("999", s.titulo); // la nueva publicación aparece en Tus publicaciones
         }
         if (req.url.startsWith("/__sold/")) sold.push(req.url.split("/").pop());
+        if (req.url.startsWith("/__deleted/")) {
+          const id = req.url.split("/").pop();
+          deleted.push(id);
+          listings.delete(id);
+        }
         if (req.url.startsWith("/__boost/")) {
           const u = new URL(req.url, "http://x");
           const id = u.pathname.split("/").pop();
@@ -377,4 +392,50 @@ test("pauta: monto del payload por encima del tope (₡5.000) → fallido sin ab
   assert.equal(res.status, "fallido");
   assert.equal(boosts.length, n);
   await page.close();
+});
+
+const eliminarTask = (title, extra = {}) => ({ id: "te", action: "eliminar", kit: { title }, externalUrl: null, images: [], ...extra });
+
+test("eliminar: borra SOLO la de título exacto (no la que comparte prefijo), verificada en el ítem", { timeout: 180_000 }, async () => {
+  const page = await context.newPage();
+  deleted.length = 0;
+  const r = await runTask(page, eliminarTask(PALMAR), { base });
+  assert.equal(r.status, "hecha");
+  assert.equal(r.externalUrl, `${base}/marketplace/item/910/`);
+  assert.deepEqual(deleted, ["910"]);
+  assert.ok(listings.has("911"));
+  // Ya no está: 0 coincidencias → error, nada se toca.
+  await assert.rejects(eliminar(page, eliminarTask(PALMAR), { base }), /No encontré ninguna publicación/);
+  assert.deepEqual(deleted, ["910"]);
+  await page.close();
+});
+
+test("eliminar: 'Lentes de sol Bloo' sin matchAll, o matchAll con otro título → error sin tocar", { timeout: 60_000 }, async () => {
+  const page = await context.newPage();
+  deleted.length = 0;
+  await assert.rejects(eliminar(page, eliminarTask(MANUAL), { base }), /solo se borra con matchAll/);
+  await assert.rejects(eliminar(page, eliminarTask(TITLE_Q, { matchAll: true }), { base }), /matchAll solo vale/);
+  assert.deepEqual(deleted, []);
+  await page.close();
+});
+
+test("eliminar matchAll (dueño 2026-10-15): borra los manuales 'Lentes de sol Bloo' de a UNO y nada más", { timeout: 300_000 }, async () => {
+  const page = await context.newPage();
+  deleted.length = 0;
+  const antes = new Map(listings);
+  const r1 = await runTask(page, eliminarTask(MANUAL, { matchAll: true }), { base });
+  assert.equal(r1.status, "hecha");
+  assert.equal(r1.remaining, 1);
+  const r2 = await runTask(page, eliminarTask(MANUAL, { matchAll: true }), { base });
+  assert.equal(r2.remaining, 0);
+  assert.deepEqual([...deleted].sort(), ["111", "112"]);
+  const r3 = await runTask(page, eliminarTask(MANUAL, { matchAll: true }), { base });
+  assert.equal(r3.status, "hecha");
+  assert.equal(r3.remaining, 0);
+  assert.equal(r3.externalUrl, undefined);
+  assert.equal(deleted.length, 2);
+  // Nada más se tocó: ni "Lentes de sol Bloo Marina" ni ningún "Lentes de sol bloo · …".
+  for (const [id, t] of antes) if (t !== MANUAL) assert.ok(listings.has(id), `se borró ${id} (${t})`);
+  await page.close();
+  resetListings();
 });

@@ -146,7 +146,7 @@ export async function PATCH(request: Request, { params }: { params: { id: string
         const canceladas = await cancelarTareasAbiertas(
           prisma,
           listing.id,
-          ["publicar", "quitar", "reemplazar"],
+          ["publicar", "quitar", "reemplazar", "eliminar"],
           "Cris pausó la publicación"
         );
         detalle = { de: actual, a: "pausado", tareasCanceladas: canceladas };

@@ -29,7 +29,7 @@ const argv = new Set(process.argv.slice(2));
 const dryRun = argv.has("--dry-run") || argv.has("--no-submit") || process.env.ROBOT_DRY_RUN === "true";
 const BUDGET_MS = Number(process.env.ROBOT_BUDGET_MS) > 0 ? Number(process.env.ROBOT_BUDGET_MS) : 570_000;
 const DEADLINE = Date.now() + BUDGET_MS;
-const ACTIONS = new Set(["publicar", "quitar", "reemplazar"]);
+const ACTIONS = new Set(["publicar", "quitar", "reemplazar", "eliminar"]);
 
 function loadStorageState() {
   const b64 = process.env.FB_STORAGE_STATE_B64 || "";

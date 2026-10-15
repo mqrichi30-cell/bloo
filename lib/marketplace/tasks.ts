@@ -50,10 +50,27 @@ import {
   type ListingStatus,
 } from "./status";
 
-export const TASK_ACTIONS = ["publicar", "quitar", "reemplazar"] as const;
+export const TASK_ACTIONS = ["publicar", "quitar", "reemplazar", "eliminar"] as const;
 export type TaskAction = (typeof TASK_ACTIONS)[number];
-/** Las que decide el sync solo. 'reemplazar' la crea únicamente el script. */
-export type AccionAutomatica = Exclude<TaskAction, "reemplazar">;
+/** Las que decide el sync solo. 'reemplazar' y 'eliminar' las crea únicamente un script. */
+export type AccionAutomatica = Exclude<TaskAction, "reemplazar" | "eliminar">;
+
+/**
+ * 'eliminar' (dueño 2026-10-15): BORRA de Marketplace una publicación ya
+ * vendida/agotada (fotos viejas). Carril rápido, nunca pauta ni historia.
+ * El título EXACTO a borrar se congela en MarketplaceTask.title al encolar
+ * (publishedTitle). 0 o >1 coincidencias → fallida, no toca nada.
+ * Excepción autorizada por el dueño: con el título EXACTO de sus listados
+ * manuales viejos ("Lentes de sol Bloo", B mayúscula) la tarea va con
+ * matchAll: borra UNA de todas las que tengan ese título idéntico por corrida
+ * y, si quedan, se re-encola sola (ver aplicarResultado). Ningún otro título
+ * activa matchAll; la tarea no toca la publicación a la que va colgada.
+ */
+export const TITULO_MANUALES_MATCH_ALL = "Lentes de sol Bloo";
+export function esMatchAll(action: string, title: string | null | undefined): boolean {
+  return action === "eliminar" && (title ?? "").replace(/\s+/g, " ").trim() === TITULO_MANUALES_MATCH_ALL;
+}
+export const NOTA_ELIMINADA = "eliminada en Marketplace";
 export const TASK_STATUSES = ["pendiente", "en_proceso", "hecha", "fallida", "cancelada"] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 export const TASK_ABIERTAS: TaskStatus[] = ["pendiente", "en_proceso"];
@@ -298,9 +315,12 @@ export async function reconciliarTareas(): Promise<ReconciliacionTareas> {
         const ultima = l.tasks[0];
         let abierta = ultima && (TASK_ABIERTAS as string[]).includes(ultima.status) ? ultima : undefined;
 
+        // 'eliminar' nunca la cancela el sync (la encola el dueño a propósito).
         const compatible =
           abierta !== undefined &&
-          (abierta.action === deseada || (abierta.action === "reemplazar" && reemplazoVigente(l.status, ctx)));
+          (abierta.action === deseada ||
+            abierta.action === "eliminar" ||
+            (abierta.action === "reemplazar" && reemplazoVigente(l.status, ctx)));
         if (abierta && !compatible && abierta.status === "pendiente") {
           const r = await tx.marketplaceTask.updateMany({
             where: { id: abierta.id, status: "pendiente" },
@@ -452,29 +472,30 @@ export interface DecisionCarril {
 
 /**
  * Decisión pura (testeable) de qué carril toca, con el MISMO orden que el
- * claim: quitar → publicar (si su slot diario está abierto) → reemplazar.
+ * claim: quitar → eliminar → publicar (si su slot diario está abierto) → reemplazar.
  * `listas` = pendientes repartibles ya (no esperan foto), por acción.
  */
 export function decidirCarril(
   ritmo: { general: Date | null; publicar: Date | null },
-  listas: { publicar: number; quitar: number; reemplazar: number }
+  listas: { publicar: number; quitar: number; reemplazar: number; eliminar?: number }
 ): DecisionCarril {
-  const hay = listas.publicar + listas.quitar + listas.reemplazar > 0;
+  const eliminar = listas.eliminar ?? 0;
+  const hay = listas.publicar + listas.quitar + listas.reemplazar + eliminar > 0;
   if (ritmo.general) return { due: false, lane: null, nextDueAt: hay ? ritmo.general : null };
-  if (listas.quitar > 0) return { due: true, lane: "rapida", nextDueAt: null };
+  if (listas.quitar > 0 || eliminar > 0) return { due: true, lane: "rapida", nextDueAt: null };
   if (listas.publicar > 0 && !ritmo.publicar) return { due: true, lane: "diaria", nextDueAt: null };
   if (listas.reemplazar > 0) return { due: true, lane: "rapida", nextDueAt: null };
   return { due: false, lane: null, nextDueAt: listas.publicar > 0 ? ritmo.publicar : null };
 }
 
 /** Pendientes repartibles ya (no esperan foto), por acción. */
-export async function contarListasPorAccion(): Promise<{ publicar: number; quitar: number; reemplazar: number }> {
+export async function contarListasPorAccion(): Promise<{ publicar: number; quitar: number; reemplazar: number; eliminar: number }> {
   const estucheOk = await estucheDisponible();
   const rows = await prisma.$queryRaw<{ action: string; n: number }[]>`
     SELECT q."action", COUNT(*)::int AS n FROM ${SCHEMA}."MarketplaceTask" q
      WHERE q."status" = 'pendiente' AND q."attempts" < ${ROBOT_MAX_ATTEMPTS} AND NOT ${esperandoFoto(estucheOk)}
      GROUP BY q."action"`;
-  const out = { publicar: 0, quitar: 0, reemplazar: 0 };
+  const out = { publicar: 0, quitar: 0, reemplazar: 0, eliminar: 0 };
   for (const r of rows) if (r.action in out) out[r.action as keyof typeof out] = r.n;
   return out;
 }
@@ -577,7 +598,7 @@ export async function reclamarSiguiente(): Promise<{
           WHERE q."status" = 'pendiente' AND q."attempts" < ${ROBOT_MAX_ATTEMPTS}
             AND NOT ${esperandoFoto(estucheOk)}
             AND (${!publicarCerrado} OR q."action" <> 'publicar')
-          ORDER BY (q."action" = 'quitar') DESC, (q."action" = 'publicar') DESC, q."createdAt" ASC, q."id" ASC
+          ORDER BY (q."action" = 'quitar') DESC, (q."action" = 'eliminar') DESC, (q."action" = 'publicar') DESC, q."createdAt" ASC, q."id" ASC
           LIMIT 1
           FOR UPDATE SKIP LOCKED
        )
@@ -599,6 +620,9 @@ export interface RobotTaskPayload {
   /** Solo 'reemplazar': título EXACTO de la publicación vieja a quitar
    *  (ChannelListing.publishedTitle). null en las otras acciones. */
   oldTitle: string | null;
+  /** Solo 'eliminar' con el título EXACTO de los manuales del dueño: borrar
+   *  UNA de todas las publicaciones con ese título idéntico. */
+  matchAll: boolean;
   kit: {
     title: string;
     description: string;
@@ -701,12 +725,23 @@ export async function armarPayload(t: TareaReclamada): Promise<RobotTaskPayload>
   // pasa a ChannelListing.publishedTitle aunque kit.ts cambie en el medio.
   // Ojo 'reemplazar': el título nuevo suele ser IGUAL al viejo (el precio no
   // va en el título) — el robot tiene que quitar la vieja ANTES de publicar.
-  const title = action === "quitar" ? l.publishedTitle ?? kit.title : kit.title;
+  // 'eliminar': el título se congeló al encolar (puede ser el de los manuales).
+  const congelado =
+    action === "eliminar"
+      ? (await prisma.marketplaceTask.findUniqueOrThrow({ where: { id: t.id }, select: { title: true } })).title
+      : null;
+  const title =
+    action === "eliminar"
+      ? congelado ?? l.publishedTitle ?? kit.title
+      : action === "quitar"
+        ? l.publishedTitle ?? kit.title
+        : kit.title;
   const oldTitle = action === "reemplazar" ? l.publishedTitle ?? kit.title : null;
+  const matchAll = esMatchAll(action, title);
   await prisma.marketplaceTask.update({ where: { id: t.id }, data: { title } });
 
   let images: string[] = [];
-  if (action !== "quitar") {
+  if (action !== "quitar" && action !== "eliminar") {
     // El hero aceptado más reciente (gptimage: o cfedit:). Para 'reemplazar',
     // posterior a la tarea — mismo criterio que esperandoFoto(), que ya lo
     // garantizó en el claim; se re-chequea por si acaso.
@@ -725,8 +760,10 @@ export async function armarPayload(t: TareaReclamada): Promise<RobotTaskPayload>
     id: t.id,
     action,
     listingId: t.listingId,
-    externalUrl: t.externalUrl ?? l.externalUrl,
+    // matchAll: nunca la URL de la publicación ancla (no es la que se borra).
+    externalUrl: matchAll ? null : t.externalUrl ?? l.externalUrl,
     oldTitle,
+    matchAll,
     kit: {
       title,
       description: kit.description,
@@ -736,13 +773,13 @@ export async function armarPayload(t: TareaReclamada): Promise<RobotTaskPayload>
       location: "San José",
     },
     images,
-    boost: await boostPara(action, t.boostStatus),
+    boost: action === "eliminar" ? null : await boostPara(action, t.boostStatus),
   };
 }
 
 export type ResultadoRobot =
   | { status: "dry_run" }
-  | { status: "hecha"; externalUrl?: string; boost?: BoostReporte }
+  | { status: "hecha"; externalUrl?: string; boost?: BoostReporte; remaining?: number }
   | { status: "fallida"; error?: string; boost?: BoostReporte }
   | { status: "necesita_humano"; error?: string; boost?: BoostReporte };
 
@@ -885,11 +922,28 @@ export async function aplicarResultado(taskId: string, r: ResultadoRobot): Promi
         status: "hecha",
         doneAt: ahora,
         lockedUntil: null,
-        lastError: null,
+        lastError: t.action === "eliminar" ? NOTA_ELIMINADA : null,
         externalUrl: r.externalUrl ?? null,
         ...boost,
       },
     });
+    if (t.action === "eliminar" && esMatchAll(t.action, t.title)) {
+      // Manuales del dueño: la publicación ancla NO se toca. Si quedan más con
+      // el título idéntico, se re-encola (una por corrida).
+      if ((r.remaining ?? 0) > 0) {
+        await tx.marketplaceTask.create({
+          data: { listingId: t.listingId, action: "eliminar", status: "pendiente", title: t.title },
+        });
+      }
+      return {
+        ok: true,
+        task: { id: t.id, status: "hecha", attempts: t.attempts },
+        transicion: null,
+        listingMovido: false,
+        action: t.action,
+        listingId: t.listingId,
+      };
+    }
     const l = await tx.channelListing.findUniqueOrThrow({
       where: { id: t.listingId },
       select: {
@@ -934,8 +988,12 @@ export async function aplicarResultado(taskId: string, r: ResultadoRobot): Promi
       });
       movido = u.count;
     } else {
+      // quitar / eliminar: queda 'vendido' (eliminar: ya lo estaba o se agotó).
       const u = await tx.channelListing.updateMany({
-        where: { id: t.listingId, status: { in: ["agotado_marcar_vendido", "publicado"] } },
+        where: {
+          id: t.listingId,
+          status: { in: t.action === "eliminar" ? ["agotado_marcar_vendido"] : ["agotado_marcar_vendido", "publicado"] },
+        },
         data: { status: "vendido", soldAt: ahora },
       });
       movido = u.count;

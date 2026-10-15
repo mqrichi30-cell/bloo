@@ -809,3 +809,58 @@ export async function reemplazar(page, task, files, opts = {}) {
   const r = await publicar(page, task, files, { ...opts, exclude: [...(opts.exclude || []), itemId(oldUrl) || ""].filter(Boolean) });
   return { ...r, oldMethod: q.method, oldUrl };
 }
+
+/** Título EXACTO de los listados manuales viejos del dueño: el único que admite matchAll (dueño 2026-10-15). */
+export const MANUAL_MATCH_ALL_TITLE = "Lentes de sol Bloo";
+
+/**
+ * 'eliminar' (dueño 2026-10-15): BORRA una publicación vendida/agotada con fotos viejas.
+ * - Normal: UNA publicación con título EXACTO (URL guardada si muestra ese título; si no, búsqueda).
+ *   0 o >1 coincidencias → Error (fallida), no toca nada.
+ * - matchAll (solo título === "Lentes de sol Bloo"): borra UNA de todas las que tengan ese título
+ *   idéntico y devuelve cuántas quedan (el servidor re-encola). Nunca otro título.
+ * Siempre verifica el título exacto en la página del ítem antes de borrar.
+ * @param {Page} page @param {import('./api.mjs').Task} task @param {FlowOpts} [opts]
+ * @returns {Promise<{method: 'eliminado'|'ninguna'|'dry-run', url: string|null, remaining: number}>}
+ */
+export async function eliminar(page, task, opts = {}) {
+  const base = opts.base || FB_BASE;
+  const title = cleanTitle(task.kit?.title || "");
+  if (!title) throw new Error("Tarea eliminar sin título");
+  const matchAll = task.matchAll === true;
+  if (matchAll && title !== MANUAL_MATCH_ALL_TITLE) throw new Error(`matchAll solo vale para "${MANUAL_MATCH_ALL_TITLE}"; no toco "${title}"`);
+  if (!matchAll && title === MANUAL_MATCH_ALL_TITLE) throw new Error(`"${title}" solo se borra con matchAll`);
+
+  const exact = async () => Boolean(await firstVisible([page.getByText(title, { exact: true })], 10_000));
+  let url = null;
+  let remaining = 0;
+  if (matchAll) {
+    const { ids, unresolved } = await resolveIds(page, title, base);
+    if (unresolved > 0) throw new Error(`Hay ${unresolved} tarjeta(s) "${title}" sin id verificable; no adivino`);
+    if (ids.length === 0) return { method: "ninguna", url: null, remaining: 0 };
+    url = `${base}/marketplace/item/${ids[0]}/`;
+    remaining = ids.length - 1;
+  } else {
+    const saved = task.externalUrl ? normalizeItemUrl(task.externalUrl, base) : null;
+    if (saved) {
+      await go(page, saved);
+      await assertNoCheckpoint(page);
+      if (await exact()) url = saved;
+    }
+    if (!url) {
+      url = await findListingUrl(page, title, base, { attempts: 2 });
+      if (!url) throw new Error(`No encontré ninguna publicación con el título exacto "${title}"`);
+    }
+  }
+
+  await go(page, url);
+  await assertNoCheckpoint(page);
+  if (!(await exact())) throw new Error(`La publicación ${safeUrl(url)} no muestra el título exacto "${title}"; no la toco`);
+  if (opts.dryRun) {
+    if (!(await deleteMenuReachable(page))) throw new Error('No encontré el menú para eliminar');
+    log('dry-run: encontré el menú para eliminar, NO se hizo clic');
+    return { method: "dry-run", url, remaining };
+  }
+  await deleteOpenListing(page);
+  return { method: "eliminado", url, remaining };
+}

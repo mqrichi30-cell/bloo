@@ -87,6 +87,9 @@ export const robotResultSchema = z
     // Prueba sin Facebook: solo libera el lease (vuelve a pendiente, sin
     // intento). Si viene, se ignora `status`.
     dryRun: z.boolean().optional(),
+    // Solo 'eliminar' con matchAll: cuántas publicaciones con el título idéntico
+    // quedan después de esta (>0 → el servidor re-encola).
+    remaining: z.number().int().min(0).max(200).nullish(),
     // Pauta tras publicar/reemplazar. Va aparte del status: un boost
     // 'fallido' NO hace fallar la publicación. amountCrc en colones enteros
     // (en la base se guarda en céntimos). Tope generoso: el server ofrece 500.

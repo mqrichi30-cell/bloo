@@ -2,7 +2,7 @@
 // Orquesta UNA tarea ya reclamada sobre una página abierta y devuelve el reporte para el panel.
 // Separado de run.mjs (API, navegador, secretos) para poder probarlo contra el stub local.
 import { parseBoostConfig, promocionar } from "./boost.mjs";
-import { eliminarVieja, publicar, quitar, reemplazar } from "./facebook.mjs";
+import { eliminar, eliminarVieja, publicar, quitar, reemplazar } from "./facebook.mjs";
 import { log } from "./util.mjs";
 
 /** Tiempo mínimo que debe quedar en la corrida para intentar la pauta (abrir + 2 pantallas + verificar). */
@@ -44,6 +44,18 @@ export async function runTask(page, task, opts = {}) {
     const r = await quitar(page, task, flow);
     log(`quitar: ${r.method}`);
     return r.method === "dry-run" ? null : { status: "hecha" };
+  }
+
+  if (task.action === "eliminar") {
+    // Nunca pauta ni historia: solo borra (título exacto verificado en el ítem).
+    const r = await eliminar(page, task, flow);
+    log(`eliminar: ${r.method}${task.matchAll ? ` (quedan ${r.remaining})` : ""}`);
+    if (r.method === "dry-run") return null;
+    /** @type {TaskResult} */
+    const out = { status: "hecha", ...(r.url ? { externalUrl: r.url } : {}) };
+    if (task.matchAll) out.remaining = r.remaining;
+    if (r.method === "ninguna") out.error = "No quedaba ninguna con ese título";
+    return out;
   }
 
   if (task.action === "publicar" || task.action === "reemplazar") {

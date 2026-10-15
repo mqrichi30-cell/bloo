@@ -3,7 +3,7 @@
 // diario con la única pauta del día.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { BOOST_AMOUNT_CRC, carrilDe, decidirBoost, decidirCarril, ROBOT_PACING_MINUTES } from "@/lib/marketplace/tasks";
+import { BOOST_AMOUNT_CRC, carrilDe, decidirBoost, decidirCarril, esMatchAll, ROBOT_PACING_MINUTES } from "@/lib/marketplace/tasks";
 import { disparaCampana } from "@/lib/story-ads/config";
 
 const libre = { general: null, publicar: null };
@@ -59,4 +59,25 @@ test("historias: reemplazar/quitar nunca crean campaña, ni con la llave vieja",
   assert.equal(disparaCampana("reemplazar", env), false);
   assert.equal(disparaCampana("quitar", env), false);
   assert.equal(disparaCampana("publicar", env), true);
+});
+
+test("eliminar: carril rápido, sin pauta ni historia", () => {
+  assert.equal(carrilDe("eliminar"), "rapida");
+  assert.equal(decidirBoost("eliminar", null, "on", 0, 1), null);
+  assert.equal(disparaCampana("eliminar", { STORY_ADS_MODE: "on" } as unknown as NodeJS.ProcessEnv), false);
+  assert.deepEqual(decidirCarril(slotCerrado, { publicar: 0, quitar: 0, reemplazar: 0, eliminar: 1 }), {
+    due: true,
+    lane: "rapida",
+    nextDueAt: null,
+  });
+});
+
+test("eliminar matchAll: SOLO el título exacto de los manuales del dueño", () => {
+  assert.equal(esMatchAll("eliminar", "Lentes de sol Bloo"), true);
+  assert.equal(esMatchAll("eliminar", " Lentes  de sol Bloo "), true); // solo normaliza espacios
+  assert.equal(esMatchAll("eliminar", "Lentes de sol bloo"), false); // mayúsculas cuentan
+  assert.equal(esMatchAll("eliminar", "Lentes de sol bloo · Palmar · Negro · Gris"), false);
+  assert.equal(esMatchAll("eliminar", "Lentes de sol Bloo Marina"), false);
+  assert.equal(esMatchAll("quitar", "Lentes de sol Bloo"), false);
+  assert.equal(esMatchAll("eliminar", null), false);
 });

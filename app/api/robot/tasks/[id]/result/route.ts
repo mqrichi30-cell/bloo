@@ -35,7 +35,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
     status === "dry_run"
       ? { status: "dry_run" }
       : status === "hecha"
-        ? { status: "hecha", externalUrl: b.externalUrl ?? undefined, boost }
+        ? { status: "hecha", externalUrl: b.externalUrl ?? undefined, boost, remaining: b.remaining ?? undefined }
         : { status, error: b.error ?? undefined, boost }
   );
   if (!r.ok) return NextResponse.json({ error: r.error }, { status: r.code });
