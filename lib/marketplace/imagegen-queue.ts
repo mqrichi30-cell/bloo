@@ -37,7 +37,13 @@ const RECLAMABLE = Prisma.sql`
   AND EXISTS (
     SELECT 1 FROM ${SCHEMA}."ChannelListing" l
      WHERE l."modelId" = g."modelId" AND l."status" NOT IN ('pausado', 'vendido')
-  )`;
+  )
+  -- 'story' bajo demanda (2026-10-14): si el modelo ya tiene una 'lista' se
+  -- reutiliza esa (lib/story-ads/story-image.ts); nunca se paga otra.
+  AND NOT (g."variant" = 'story' AND EXISTS (
+    SELECT 1 FROM ${SCHEMA}."GeneratedImage" s
+     WHERE s."modelId" = g."modelId" AND s."variant" = 'story' AND s."estado" = 'lista' AND s."id" <> g."id"
+  ))`;
 
 export interface ClaimedImage {
   imageId: string;

@@ -46,3 +46,6 @@ next-env.d.ts
 
 # Local Netlify folder
 .netlify
+
+# catalogo del lote GPT (imagegen.catalogo): fotos + PDF, se regeneran
+/catalogo/

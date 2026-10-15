@@ -15,9 +15,9 @@
 import { Prisma, type StoryAdCampaign } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { writeAudit } from "@/lib/audit";
-import { esEstiloNuevo, IMAGE_MAX_ATTEMPTS } from "@/lib/marketplace/status";
 import { isAllowedPublicUrl } from "@/lib/marketplace/hosts";
 import { gastoACent } from "./budget";
+import { decidirImagenStory } from "./story-image";
 import { avanzarCampana, refrescarCampana, type CampanaPatch, type CampanaRow } from "./campaign";
 import {
   inicioDiaCR,
@@ -168,7 +168,7 @@ async function prepararImagenes(resumen: ResumenStoryAds): Promise<void> {
               id: true,
               generatedImages: {
                 where: { variant: { in: ["hero", "story"] } },
-                select: { id: true, variant: true, estado: true, provider: true, publicUrl: true, sourceUrl: true, attempts: true, createdAt: true },
+                select: { id: true, variant: true, estado: true, provider: true, publicUrl: true, sourceUrl: true, attempts: true, lastError: true, createdAt: true },
                 orderBy: { createdAt: "desc" },
               },
             },
@@ -186,19 +186,16 @@ async function prepararImagenes(resumen: ResumenStoryAds): Promise<void> {
       resumen.omitidas++;
       continue;
     }
-    const imgs = c.listing.model.generatedImages;
-    const story = imgs.filter((i) => i.variant === "story");
-    const lista = story.find((i) => i.estado === "lista" && i.publicUrl);
-    if (lista) {
-      await prisma.storyAdCampaign.update({ where: { id: c.id }, data: { estado: "pendiente", storyImageId: lista.id } });
+    // Bajo demanda (Cris 2026-10-14): una 'story' lista del modelo se reutiliza
+    // siempre; solo se pide una nueva si no hay ninguna (ver story-image.ts).
+    const d = decidirImagenStory(c.listing.model.generatedImages);
+    if (d.tipo === "usar") {
+      await prisma.storyAdCampaign.update({ where: { id: c.id }, data: { estado: "pendiente", storyImageId: d.imageId } });
       resumen.listas++;
       continue;
     }
-    const enCurso = story.some(
-      (i) => i.estado === "pendiente" || i.estado === "generando" || (i.estado === "error" && i.attempts < IMAGE_MAX_ATTEMPTS)
-    );
-    if (enCurso) continue;
-    if (story.length > 0 && story.every((i) => i.estado === "error" || i.estado === "rechazada")) {
+    if (d.tipo === "esperar") continue;
+    if (d.tipo === "fallida") {
       // Ya se intentó y el worker se rindió (o QA la rechazó): no se pide otra
       // sola (tope de gasto en IA). Cris decide.
       await prisma.storyAdCampaign.update({
@@ -209,9 +206,7 @@ async function prepararImagenes(resumen: ResumenStoryAds): Promise<void> {
     }
     // Referencia = la misma foto de Nihao del hero aceptado (la allowlist del
     // worker solo baja de img.nihaojewelry.com).
-    const hero = imgs.find((i) => i.variant === "hero" && i.estado === "lista" && esEstiloNuevo(i.provider));
-    if (!hero) continue;
-    await prisma.generatedImage.create({ data: { modelId: c.listing.model.id, variant: "story", sourceUrl: hero.sourceUrl } });
+    await prisma.generatedImage.create({ data: { modelId: c.listing.model.id, variant: "story", sourceUrl: d.sourceUrl } });
     resumen.imagenesPedidas++;
   }
 }

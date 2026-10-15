@@ -219,7 +219,8 @@ def gpt_wait(skip: str) -> dict[str, Any] | None:
 
 
 def gpt_scene(cut: Image.Image, gpt: OpenAIEdit, reviewer: VisionReviewer,
-              image_id: str | None = None) -> tuple[dict[str, Image.Image] | None, dict[str, Any]]:
+              image_id: str | None = None,
+              prompt: str | None = None) -> tuple[dict[str, Image.Image] | None, dict[str, Any]]:
     """Paid route: ONE GPT Image call (EDIT_PROMPTS['hero'] as is), then the free checks of the edit
     path (duplicate/reflection, fidelity gate, crop, real-pixel restore, AI review). GPT is never
     called again: a hard defect returns (None, meta) and the caller falls back to cfedit."""
@@ -227,7 +228,7 @@ def gpt_scene(cut: Image.Image, gpt: OpenAIEdit, reviewer: VisionReviewer,
     ref = build_reference(cut)
     big = build_reference(cut, side=GPT_REF_SIDE)
     try:
-        img, call = gpt.edit(EDIT_PROMPTS["hero"], big.image, image_id)
+        img, call = gpt.edit(prompt or EDIT_PROMPTS["hero"], big.image, image_id)  # prompt: batch auto-correct
     except QuotaExhausted as e:
         gpt.mark_exhausted(e.reset_at, str(e))
         meta.update(rejected=True, why=f"quota: {str(e)[:160]}")
@@ -305,7 +306,7 @@ def story_frame(img: Image.Image, ref: Any, alpha: Any,
 
 
 def gpt_story(cut: Image.Image, gpt: OpenAIEdit, reviewer: VisionReviewer,
-              image_id: str | None = None) -> tuple[Image.Image | None, dict[str, Any]]:
+              image_id: str | None = None, prompt: str | None = None) -> tuple[Image.Image | None, dict[str, Any]]:
     """Paid Story route: ONE GPT Image call at 1024x1536 (hero prompt + vertical framing, vertical
     input with the product pre-placed), then story_frame and the AI review of the final 9:16 frame.
     Never called twice: a hard defect returns (None, meta) and the caller falls back to cfedit."""
@@ -313,7 +314,7 @@ def gpt_story(cut: Image.Image, gpt: OpenAIEdit, reviewer: VisionReviewer,
                             "size": f"{STORY_GEN_SIZE[0]}x{STORY_GEN_SIZE[1]}"}
     ref = build_reference(cut)
     try:
-        img, call = gpt.edit(EDIT_PROMPTS[STORY], build_story_reference(cut, STORY_GEN_SIZE), image_id,
+        img, call = gpt.edit(prompt or EDIT_PROMPTS[STORY], build_story_reference(cut, STORY_GEN_SIZE), image_id,
                              size=STORY_GEN_SIZE)
     except QuotaExhausted as e:
         gpt.mark_exhausted(e.reset_at, str(e))
