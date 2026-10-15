@@ -29,6 +29,9 @@ const DIALOG_CARDS = new Set(["901", "902"]);
 const PALMAR = "Lentes de sol bloo · Palmar · Negro · Gris";
 const deleted = []; // POST /__deleted/<id>: cada uno borraría una publicación real
 const sellingUrls = [];
+// Un enlace suelto a OTRA publicación en "Tus publicaciones" (ej. un aviso de promoción). Caso real
+// 2026-10-15: con tarjetas sin enlace, ese único enlace "abarcaba" la lista y se tomaba su id.
+let bannerId = null;
 const DESC =
   Array.from({ length: 12 }, (_, i) => `Línea ${i + 1}: acetato pulido, protección UV400, estuche incluido. ₡`).join("\n") +
   "\n\nEnvíos a todo CR.";
@@ -63,6 +66,7 @@ const sellingHtml = (q = "") => {
   return `<!doctype html><html lang="es"><body><h1>Tus publicaciones</h1><div class="grid">${shown
     .map(([id, t], i) => card(id, t, i))
     .join("")}</div>
+${bannerId ? `<div class="promo"><span>Promociona tu publicación</span><a href="/marketplace/item/${bannerId}/">Ver</a></div>` : ""}
 <script>
 const T=${JSON.stringify(Object.fromEntries(listings))};
 function openDlg(id){const d=document.createElement("div");d.setAttribute("role","dialog");
@@ -220,6 +224,26 @@ test("quitar: tarjetas sin enlace con el mismo prefijo → elige la de título E
     await page.close();
   }
   sold.length = 0;
+});
+
+test("quitar: un enlace suelto a otra publicación no se confunde con la tarjeta sin enlace", { timeout: 240_000 }, async () => {
+  bannerId = "901"; // Té Claro · Polvos
+  try {
+    for (const [title, id] of [
+      [CHI_SECO, "902"],
+      [TITLE_Q, "700"],
+    ]) {
+      const page = await context.newPage();
+      sold.length = 0;
+      const r = await quitar(page, quitarTask({ title }), { base });
+      assert.equal(r.url, `${base}/marketplace/item/${id}/`);
+      assert.deepEqual(sold, [id]);
+      await page.close();
+    }
+  } finally {
+    bannerId = null;
+    sold.length = 0;
+  }
 });
 
 test("quitar NUNCA toca los listados manuales: 2 coincidencias exactas → error", { timeout: 120_000 }, async () => {

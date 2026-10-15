@@ -218,10 +218,10 @@ async function openSellingAndScan(page, title, base, filter = true) {
  * Nunca usa prefijos: "… · Té · Seco" ≠ "… · Té Claro · Polvos".
  * @param {Page} page @param {string} title
  */
-export async function markExactTitleCards(page, title) {
-  return page.evaluate((want) => {
+export async function markExactTitleCards(page, title, ignoreLinks = false) {
+  return page.evaluate(([want, ignore]) => {
     const clean = (/** @type {any} */ s) => String(s || "").replace(/ /g, " ").replace(/\s+/g, " ").trim();
-    const linked = [...document.querySelectorAll('a[href*="/marketplace/item/"]')];
+    const linked = ignore ? [] : [...document.querySelectorAll('a[href*="/marketplace/item/"]')];
     for (const el of document.querySelectorAll("[data-bloo-pick]")) el.removeAttribute("data-bloo-pick");
     let k = 0;
     for (const el of document.body.querySelectorAll("*")) {
@@ -231,7 +231,7 @@ export async function markExactTitleCards(page, title) {
       el.setAttribute("data-bloo-pick", String(k++));
     }
     return k;
-  }, cleanTitle(title));
+  }, /** @type {[string, boolean]} */ ([cleanTitle(title), ignoreLinks]));
 }
 
 /**
@@ -297,11 +297,26 @@ async function resolveIds(page, title, base) {
     filter = false; // el buscador de Facebook no lo encontró: lista completa, por si acaso
     first = await openSellingAndScan(page, title, base, false);
   }
-  const ids = new Set(first.ids);
-  if (!first.orphanCount) return { ids: [...ids], unresolved: 0 };
-  if (first.ids.length) return { ids: [...ids], unresolved: first.orphanCount }; // mezcla rara: no adivinar
-  const total = await markExactTitleCards(page, title);
-  if (!total) return { ids: [], unresolved: first.orphanCount };
+  // Ids sacados de enlaces: se VERIFICAN en la página del ítem. 2026-10-15: con tarjetas sin enlace,
+  // el único enlace a un ítem de la página (otra publicación) "abarcaba" toda la lista y se tomaba
+  // su id para cualquier título. Si alguno no verifica, los enlaces de esta página no son confiables:
+  // se descartan todos y se resuelve haciendo clic en cada texto con el título exacto.
+  const ids = new Set();
+  let linksOk = true;
+  for (const id of first.ids) {
+    if (await itemHasExactTitle(page, id, title, base)) ids.add(id);
+    else {
+      linksOk = false;
+      log(`el enlace al ítem ${id} no muestra el título exacto; resuelvo por clic`);
+    }
+  }
+  if (linksOk && !first.orphanCount) return { ids: [...ids], unresolved: 0 };
+  if (linksOk && ids.size) return { ids: [...ids], unresolved: first.orphanCount }; // mezcla rara: no adivinar
+  const ignoreLinks = !linksOk;
+  if (ignoreLinks) ids.clear();
+  if (first.ids.length) await openSellingAndScan(page, title, base, filter); // se navegó al verificar
+  const total = await markExactTitleCards(page, title, ignoreLinks);
+  if (!total) return { ids: [], unresolved: ignoreLinks ? 0 : first.orphanCount };
   const n = Math.min(total, 6);
   let unresolved = total - n;
   for (let k = 0; k < n; k++) {
@@ -309,7 +324,7 @@ async function resolveIds(page, title, base) {
     for (let tryN = 0; tryN < 2 && !got; tryN++) {
       if (k > 0 || tryN > 0) {
         await openSellingAndScan(page, title, base, filter);
-        if ((await markExactTitleCards(page, title)) !== total) return { ids: [...ids], unresolved: unresolved + (n - k) };
+        if ((await markExactTitleCards(page, title, ignoreLinks)) !== total) return { ids: [...ids], unresolved: unresolved + (n - k) };
       }
       got = await idFromCard(page, k, title, base);
       if (got && ids.has(got)) got = null; // la misma publicación dos veces = el clic no fue a la tarjeta k
