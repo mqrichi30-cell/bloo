@@ -181,3 +181,27 @@ export async function inspectDock(page, who, outBase) {
   await dumpScreen(page, `${outBase}-3-hilo`);
   log("inspect_dock: listo (no se escribió nada)");
 }
+
+/**
+ * "Tus publicaciones": abre el menú "Más opciones para <título>" de la tarjeta y vuelca sus opciones.
+ * Solo lectura: no hace clic en ninguna opción (Escape al final). @param {import('playwright').Page} page
+ * @param {string} title @param {string} outBase
+ */
+export async function inspectSellingMenu(page, title, outBase) {
+  if (!title) throw new Error("inspect_selling_menu: falta el título (probe_text)");
+  await go(page, `https://www.facebook.com/marketplace/you/selling/?title_search=${encodeURIComponent(title)}`);
+  await page.waitForTimeout(6000);
+  const btn = page.getByRole("button", { name: `Más opciones para ${title}`, exact: true });
+  if ((await btn.count()) < 1) throw new Error("inspect_selling_menu: no encontré el botón de la tarjeta");
+  await btn.first().click();
+  await page.waitForTimeout(3000);
+  await dumpScreen(page, `${outBase}-menu`);
+  const items = await page.evaluate(() =>
+    [...document.querySelectorAll('[role="menuitem"],[role="menu"] [role="button"],[role="dialog"] [role="button"]')].map(
+      (e) => `${e.getAttribute("role")} | ${(e.getAttribute("aria-label") || e.textContent || "").replace(/\s+/g, " ").trim().slice(0, 100)}`
+    )
+  );
+  await writeFile(`${outBase}-menu-items.txt`, items.join("\n"));
+  await page.keyboard.press("Escape").catch(() => {});
+  log(`inspect_selling_menu: ${items.length} opciones (no se pulsó ninguna)`);
+}
