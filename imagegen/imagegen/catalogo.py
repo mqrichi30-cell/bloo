@@ -170,26 +170,16 @@ def centered(d: ImageDraw.ImageDraw, y: int, text: str, f: Any, fill: tuple[int,
 
 
 def cover(items: list[Item], price: int) -> Image.Image:
+    """Portada: solo el logo de bloo centrado sobre navy (color de marca)."""
     pg = Image.new("RGB", PAGE, NAVY)
-    d = ImageDraw.Draw(pg)
-    lg = logo(560, CREAM)
+    lg = logo(760, CREAM)
     if lg is not None:
-        pg.paste(lg, ((PAGE[0] - lg.width) // 2, 430), lg)
+        pg.paste(lg, ((PAGE[0] - lg.width) // 2, (PAGE[1] - lg.height) // 2), lg)
     else:
-        centered(d, 430, "bloo", font(200, True), CREAM)
-    centered(d, 820, "Catálogo · octubre 2026", font(58), CREAM)
-    centered(d, 900, "Made for sunny days.", font(40), DUSTY)
-    d.rectangle((420, 990, 820, 994), fill=DUSTY)
-    n_pub = sum(i.publicado for i in items)
-    dated = [i for i in items if i.plan[:2] == "20"]
-    lines = [f"{len(items)} colores · {fmt_crc(price)} en Marketplace",
-             f"{n_pub} publicados (reemplazo inmediato con fotos nuevas)",
-             f"{len(dated)} por publicar, uno por día"
-             + (f" del {fmt_day(dated[0].plan)} al {fmt_day(dated[-1].plan)}" if dated else ""),
-             f"{sum(i.plan == 'sin stock' for i in items)} sin stock (sin fecha)"]
-    for k, t in enumerate(lines):
-        centered(d, 1040 + k * 62, t, font(34), CREAM)
-    centered(d, PAGE[1] - 120, "@bloo_cr · wa.me/50689433677", font(30), DUSTY)
+        d = ImageDraw.Draw(pg)
+        f = font(240, True)
+        w = d.textlength("bloo", font=f)
+        d.text(((PAGE[0] - w) / 2, PAGE[1] / 2 - 140), "bloo", font=f, fill=CREAM)
     return pg
 
 
@@ -232,10 +222,6 @@ def color_page(i: Item, price: int, n: int, total: int) -> Image.Image:
     d.text((70, y), "Publicación:", font=font(34), fill=NAVY)
     d.text((300, y), plan, font=font(34, True), fill=NAVY)
     y += 60
-    foto = "nueva (GPT, lote oct-2026)" if (i.hero or {}).get("batch") else "anterior (falta regenerar)"
-    d.text((70, y - 4), "Foto:", font=font(30), fill=NAVY)
-    d.text((300, y - 4), foto, font=font(30), fill=NAVY)
-    y += 56
     label = "publicado" if i.publicado else "por publicar"
     f_chip = font(32, True)
     w = d.textlength(label, font=f_chip)
