@@ -22,6 +22,11 @@ const TITLE_Q = "Lentes de sol bloo · Corobicí · Leopardo · Seco";
 const MANUAL = "Lentes de sol Bloo"; // listados manuales del dueño: el robot NUNCA los toca
 const OLD_R = "Lentes de sol bloo · Tamarindo · Carey · Café"; // versión vieja a reemplazar
 const NEW_R = "Lentes de sol bloo · Tamarindo · Carey · Café Degradado";
+// 2026-10-15: dos colores con el mismo prefijo, tarjetas SIN enlace (abren un diálogo al hacer clic).
+const CHI_CLARO = "Lentes de sol bloo · Chirripó · Té Claro · Polvos";
+const CHI_SECO = "Lentes de sol bloo · Chirripó · Té · Seco";
+const DIALOG_CARDS = new Set(["901", "902"]);
+const sellingUrls = [];
 const DESC =
   Array.from({ length: 12 }, (_, i) => `Línea ${i + 1}: acetato pulido, protección UV400, estuche incluido. ₡`).join("\n") +
   "\n\nEnvíos a todo CR.";
@@ -37,18 +42,30 @@ const resetListings = () => {
     ["700", TITLE_Q],
     ["701", TITLE_Q + " XL"], // contiene TITLE_Q como subcadena
     ["800", OLD_R],
+    ["901", CHI_CLARO], // más nueva: arriba
+    ["902", CHI_SECO],
   ]);
 };
 
 // Dos formatos de tarjeta: título dentro del <a>, o al lado (imagen enlazada + <span> hermano).
 const card = (id, title, i) =>
-  i % 2
+  DIALOG_CARDS.has(id)
+    ? `<div class="card" role="button" tabindex="0" onclick="openDlg('${id}')"><img alt=""><div><span>${title}</span></div><span>₡15.000</span></div>`
+    : i % 2
     ? `<div class="card"><a href="/marketplace/item/${id}/?ref=selling"><span>${title}</span><span>₡15.000</span></a></div>`
     : `<div class="card"><a href="/marketplace/item/${id}/?ref=selling" aria-label="foto"><img alt=""></a><div><span>${title}</span></div><span>₡15.000</span></div>`;
-const sellingHtml = () =>
-  `<!doctype html><html lang="es"><body><h1>Tus publicaciones</h1><div class="grid">${[...listings]
+const sellingHtml = (q = "") => {
+  const shown = [...listings].filter(([, t]) => !q || t.toLowerCase().includes(q.toLowerCase()));
+  return `<!doctype html><html lang="es"><body><h1>Tus publicaciones</h1><div class="grid">${shown
     .map(([id, t], i) => card(id, t, i))
-    .join("")}</div></body></html>`;
+    .join("")}</div>
+<script>
+const T=${JSON.stringify(Object.fromEntries(listings))};
+function openDlg(id){const d=document.createElement("div");d.setAttribute("role","dialog");
+d.innerHTML='<h2>Tu publicación</h2><span></span><a href="/marketplace/item/'+id+'/">Ver publicación</a>';
+d.querySelector("span").textContent=T[id];document.body.appendChild(d);}
+</script></body></html>`;
+};
 const itemHtml = (id) => `<!doctype html><html lang="es"><body><h1><span>${listings.get(id) || "?"}</span></h1>
 <button id="m">${sold.includes(id) ? "Marcar como disponible" : "Marcar como agotado"}</button>
 <div role="dialog" id="d" hidden><p>¿Marcar como agotado?</p><button id="c">Confirmar</button></div>
@@ -97,7 +114,10 @@ before(async () => {
     if (req.url.startsWith("/marketplace/create/item")) return send(singleInput ? CREATE.replace(' multiple accept=', " accept=") : CREATE);
     const m = req.url.match(/^\/marketplace\/item\/(\d+)/);
     if (m) return send(itemHtml(m[1]));
-    if (req.url.startsWith("/marketplace/you/selling")) return send(sellingHtml());
+    if (req.url.startsWith("/marketplace/you/selling")) {
+      sellingUrls.push(req.url);
+      return send(sellingHtml(new URL(req.url, "http://x").searchParams.get("title_search") || ""));
+    }
     if (req.url.startsWith("/bloqueado/")) return res.writeHead(302, { location: "/checkpoint/abc/" }).end();
     if (req.url.startsWith("/checkpoint/")) return send(CHECKPOINT);
     res.writeHead(404).end();
@@ -164,6 +184,27 @@ test("quitar sin URL: título EXACTO, ignora el que lo contiene como subcadena",
   assert.equal(r.method, "vendido");
   assert.deepEqual(sold, ["700"]);
   await page.close();
+});
+
+test("quitar: tarjetas sin enlace con el mismo prefijo → elige la de título EXACTO y la verifica", { timeout: 180_000 }, async () => {
+  for (const [title, id] of [
+    [CHI_SECO, "902"],
+    [CHI_CLARO, "901"],
+  ]) {
+    const page = await context.newPage();
+    sold.length = 0;
+    sellingUrls.length = 0;
+    const r = await quitar(page, quitarTask({ title }), { base });
+    assert.equal(r.method, "vendido");
+    assert.equal(r.url, `${base}/marketplace/item/${id}/`);
+    assert.deepEqual(sold, [id]);
+    assert.ok(
+      sellingUrls.some((u) => new URL(u, "http://x").searchParams.get("title_search") === title),
+      JSON.stringify(sellingUrls)
+    );
+    await page.close();
+  }
+  sold.length = 0;
 });
 
 test("quitar NUNCA toca los listados manuales: 2 coincidencias exactas → error", { timeout: 120_000 }, async () => {

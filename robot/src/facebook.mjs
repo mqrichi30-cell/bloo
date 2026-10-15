@@ -174,18 +174,35 @@ export async function scanExactTitle(page, title) {
 }
 
 /**
- * Abre "Tus publicaciones" y hace scroll hasta ver el título o llegar al final de la lista
- * (Facebook carga las tarjetas por tandas, más nuevas arriba: con 60+ publicaciones la más vieja
- * queda muy abajo). @param {Page} page @param {string} title @param {string} base
+ * Término para `?title_search=` (Facebook filtra "Tus publicaciones" por texto). Usa el título hasta
+ * el primer "…" (los títulos recortados no se buscan bien). Vacío = sin filtro.
+ * @param {string} title
  */
-async function openSellingAndScan(page, title, base) {
-  await go(page, `${base}/marketplace/you/selling`);
+export function sellingSearchTerm(title) {
+  const t = cleanTitle(title).split("…")[0].trim();
+  return t.length >= 8 ? t : "";
+}
+
+/** URL de "Tus publicaciones", filtrada por título si se puede. @param {string} base @param {string} title @param {boolean} [filter] */
+export function sellingUrl(base, title, filter = true) {
+  const q = filter ? sellingSearchTerm(title) : "";
+  return `${base}/marketplace/you/selling${q ? `?title_search=${encodeURIComponent(q)}` : ""}`;
+}
+
+/**
+ * Abre "Tus publicaciones" (filtrada con title_search) y hace scroll hasta ver el título o llegar al
+ * final de la lista (Facebook carga las tarjetas por tandas, más nuevas arriba).
+ * @param {Page} page @param {string} title @param {string} base @param {boolean} [filter]
+ */
+async function openSellingAndScan(page, title, base, filter = true) {
+  await go(page, sellingUrl(base, title, filter));
+  await assertNoCheckpoint(page);
   await page.getByText(cleanTitle(title), { exact: true }).first().waitFor({ timeout: 15_000 }).catch(() => {});
   let quiet = 0;
   let lastHeight = 0;
   for (let i = 0; i < 60 && quiet < 3; i++) {
-    const found = (await scanExactTitle(page, title)).ids.length > 0;
-    if (found && i >= 2) break; // al menos 3 tandas siempre: un duplicado podría estar justo debajo
+    const r = await scanExactTitle(page, title);
+    if ((r.ids.length > 0 || r.orphanCount > 0) && i >= 2) break; // al menos 3 tandas siempre: un duplicado podría estar justo debajo
     await page.mouse.wheel(0, 1500);
     await pause(700, 1400);
     const h = await page.evaluate(() => document.body.scrollHeight);
@@ -193,6 +210,39 @@ async function openSellingAndScan(page, title, base) {
     lastHeight = h;
   }
   return scanExactTitle(page, title);
+}
+
+/**
+ * Marca con data-bloo-pick="k" cada texto cuyo contenido visible es EXACTAMENTE `title` y que no
+ * está en una tarjeta con enlace (tarjetas que abren al hacer clic). Devuelve cuántos marcó.
+ * Nunca usa prefijos: "… · Té · Seco" ≠ "… · Té Claro · Polvos".
+ * @param {Page} page @param {string} title
+ */
+export async function markExactTitleCards(page, title) {
+  return page.evaluate((want) => {
+    const clean = (/** @type {any} */ s) => String(s || "").replace(/ /g, " ").replace(/\s+/g, " ").trim();
+    const linked = [...document.querySelectorAll('a[href*="/marketplace/item/"]')];
+    for (const el of document.querySelectorAll("[data-bloo-pick]")) el.removeAttribute("data-bloo-pick");
+    let k = 0;
+    for (const el of document.body.querySelectorAll("*")) {
+      if (el.children.length !== 0 || clean(el.textContent) !== want) continue;
+      if (el.closest('[role="dialog"]')) continue;
+      if (linked.some((a) => a.contains(el) || (a.parentElement && a.parentElement.contains(el)))) continue;
+      el.setAttribute("data-bloo-pick", String(k++));
+    }
+    return k;
+  }, cleanTitle(title));
+}
+
+/**
+ * ¿El ítem `id` muestra EXACTAMENTE `title`? Navega a su página. (2026-10-15: buscando
+ * "… · Té · Seco" el robot abrió "… · Té Claro · Polvos"; ningún id se acepta sin esta verificación.)
+ * @param {Page} page @param {string} id @param {string} title @param {string} base
+ */
+async function itemHasExactTitle(page, id, title, base) {
+  await go(page, `${base}/marketplace/item/${id}/`);
+  await assertNoCheckpoint(page);
+  return Boolean(await firstVisible([page.getByText(cleanTitle(title), { exact: true })], 10_000));
 }
 
 /**
@@ -233,53 +283,93 @@ export async function findListingUrl(page, title, base = FB_BASE, opts = {}) {
 
 /**
  * Ids de TODAS las publicaciones con título exacto. Las tarjetas de "Tus publicaciones" a veces no
- * traen enlace (abren el diálogo "Tu publicación"): se abre cada una y se lee su id del diálogo.
- * `unresolved` = tarjetas con el título cuyo id no se pudo leer (el llamador no debe adivinar).
+ * traen enlace (abren al hacer clic): se recorren TODAS las tarjetas de la lista (filtrada con
+ * title_search), se hace clic solo en las de título visible idéntico y cada id obtenido se verifica
+ * en la página del ítem antes de aceptarlo.
+ * `unresolved` = tarjetas con el título cuyo id no se pudo leer/verificar (el llamador no debe adivinar).
  * @param {Page} page @param {string} title @param {string} base
  * @returns {Promise<{ids: string[], unresolved: number}>}
  */
 async function resolveIds(page, title, base) {
-  const first = await openSellingAndScan(page, title, base);
+  let filter = true;
+  let first = await openSellingAndScan(page, title, base, true);
+  if (!first.ids.length && !first.orphanCount && sellingSearchTerm(title)) {
+    filter = false; // el buscador de Facebook no lo encontró: lista completa, por si acaso
+    first = await openSellingAndScan(page, title, base, false);
+  }
   const ids = new Set(first.ids);
   if (!first.orphanCount) return { ids: [...ids], unresolved: 0 };
   if (first.ids.length) return { ids: [...ids], unresolved: first.orphanCount }; // mezcla rara: no adivinar
-  const n = Math.min(first.orphanCount, 6);
+  const total = await markExactTitleCards(page, title);
+  if (!total) return { ids: [], unresolved: first.orphanCount };
+  const n = Math.min(total, 6);
+  let unresolved = total - n;
   for (let k = 0; k < n; k++) {
-    if (k > 0) await openSellingAndScan(page, title, base);
-    await page.getByText(cleanTitle(title), { exact: true }).nth(k).click().catch(() => {});
-    await page.waitForURL(/\/marketplace\/item\/\d+/, { timeout: 5000 }).catch(() => {});
-    const u = normalizeItemUrl(page.url(), base) || (await idFromListingDialog(page, title, base));
-    const id = u ? itemId(u) : null;
-    if (!id) return { ids: [...ids], unresolved: first.orphanCount - ids.size };
-    ids.add(id);
+    let got = null;
+    for (let tryN = 0; tryN < 2 && !got; tryN++) {
+      if (k > 0 || tryN > 0) {
+        await openSellingAndScan(page, title, base, filter);
+        if ((await markExactTitleCards(page, title)) !== total) return { ids: [...ids], unresolved: unresolved + (n - k) };
+      }
+      got = await idFromCard(page, k, title, base);
+      if (got && ids.has(got)) got = null; // la misma publicación dos veces = el clic no fue a la tarjeta k
+    }
+    if (got) ids.add(got);
+    else unresolved++;
     await page.keyboard.press("Escape").catch(() => {});
   }
-  return { ids: [...ids], unresolved: Math.max(0, first.orphanCount - ids.size) };
+  return { ids: [...ids], unresolved };
+}
+
+/**
+ * Hace clic en la tarjeta marcada `k` (ya en "Tus publicaciones"), saca los ids candidatos (URL del
+ * ítem o diálogo "Tu publicación") y devuelve el ÚNICO que en su página muestra el título exacto.
+ * @param {Page} page @param {number} k @param {string} title @param {string} base @returns {Promise<string|null>}
+ */
+async function idFromCard(page, k, title, base) {
+  const target = page.locator(`[data-bloo-pick="${k}"]`);
+  await target.scrollIntoViewIfNeeded({ timeout: 5000 }).catch(() => {});
+  await pause(400, 900);
+  const clicked = await target.click({ timeout: 8000 }).then(
+    () => true,
+    () => false
+  );
+  if (!clicked) return null;
+  await page.waitForURL(/\/marketplace\/item\/\d+/, { timeout: 5000 }).catch(() => {});
+  const fromUrl = itemId(normalizeItemUrl(page.url(), base));
+  const cands = fromUrl ? [fromUrl] : await idsFromListingDialog(page, title, base);
+  const ok = [];
+  for (const id of cands) if (await itemHasExactTitle(page, id, title, base)) ok.push(id);
+  if (ok.length !== 1) {
+    log(`tarjeta ${k}: ${cands.length} candidato(s), ${ok.length} con el título exacto; no la tomo`);
+    return null;
+  }
+  return ok[0];
 }
 
 /**
  * En "Tus publicaciones" la tarjeta abre el diálogo "Tu publicación" en vez de navegar al ítem.
- * Saca el id de ese diálogo (solo si muestra el título EXACTO): primero un enlace al ítem; si no hay,
+ * Saca los ids candidatos de ese diálogo (solo si muestra el título EXACTO): enlaces al ítem; si no hay,
  * "Editar publicación" navega a /marketplace/edit/?listing_id=<id>. Nunca guarda nada en la edición.
- * @param {Page} page @param {string} title @param {string} base @returns {Promise<string|null>}
+ * El llamador verifica cada candidato en la página del ítem.
+ * @param {Page} page @param {string} title @param {string} base @returns {Promise<string[]>}
  */
-async function idFromListingDialog(page, title, base) {
-  const dlg = page.getByRole("dialog").filter({ hasText: cleanTitle(title) }).first();
-  if (!(await dlg.isVisible().catch(() => false))) return null;
-  const href = await dlg
+async function idsFromListingDialog(page, title, base) {
+  const dlg = page.getByRole("dialog").filter({ has: page.getByText(cleanTitle(title), { exact: true }) }).first();
+  if (!(await dlg.waitFor({ timeout: 5000 }).then(() => true, () => false))) return [];
+  const hrefs = await dlg
     .locator('a[href*="/marketplace/item/"]')
-    .first()
-    .getAttribute("href", { timeout: 2000 })
-    .catch(() => null);
-  const fromLink = href ? normalizeItemUrl(href, base) : null;
-  if (fromLink) return fromLink;
+    .evaluateAll((as) => as.map((a) => a.getAttribute("href") || ""))
+    .catch(() => /** @type {string[]} */ ([]));
+  const fromLinks = [...new Set(hrefs.map((h) => itemId(normalizeItemUrl(h, base))).filter(Boolean))];
+  if (fromLinks.length) return /** @type {string[]} */ (fromLinks);
   const edit = await firstVisible([dlg.getByRole("button", { name: /Editar publicaci[oó]n/i }), dlg.getByText(/^Editar publicaci[oó]n$/i)], 3000);
-  if (!edit) return null;
+  if (!edit) return [];
   await edit.click();
   await page.waitForURL(/listing_id=\d+|\/marketplace\/(item|edit)\/\d+/, { timeout: 15_000 }).catch(() => {});
   const m = page.url().match(/listing_id=(\d+)|\/marketplace\/(?:item|edit)\/(\d+)/);
   const id = m && (m[1] || m[2]);
-  return id ? `${base}/marketplace/item/${id}/` : null;
+  return id ? [id] : [];
 }
 
 /** Ids con título exacto que ya existen (antes de publicar). Nunca falla. @param {Page} page @param {string} title @param {string} base */
