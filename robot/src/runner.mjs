@@ -79,8 +79,10 @@ export async function runTask(page, task, opts = {}) {
       log(`pauta: ${boost.status}${boost.detail ? ` (${boost.detail})` : ""}`);
     }
     // Reemplazo: la vieja (ya agotada) se elimina para que no se vea "vendida" (Cris 2026-10-14).
-    if (task.action === "reemplazar" && "oldUrl" in r && r.oldUrl && r.externalUrl && r.oldUrl !== r.externalUrl) {
-      log(`vieja: ${await eliminarVieja(page, r.oldUrl, task.oldTitle || task.kit?.title || "", flow)}`);
+    if (task.action === "reemplazar" && "oldUrl" in r && r.oldUrl) {
+      const vieja = await eliminarVieja(page, r.oldUrl, task.oldTitle || task.kit?.title || "", { ...flow, newUrl: r.externalUrl });
+      log(`vieja: ${vieja}`);
+      if (vieja !== "eliminada") result.error = `Nueva publicada; la vieja NO se eliminó (${vieja}): revisar duplicado`;
     }
     return result;
   }

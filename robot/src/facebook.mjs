@@ -744,7 +744,7 @@ async function deleteOpenListing(page) {
  * Cris 2026-10-14: tras un reemplazo exitoso, la publicación vieja (ya marcada agotada) se
  * ELIMINA para que los compradores no vean un par "vendido" que sí hay. Solo por URL conocida,
  * solo si muestra el título esperado y ya está agotada (nunca una activa). Nunca lanza.
- * @param {Page} page @param {string} oldUrl @param {string} title @param {FlowOpts} [opts]
+ * @param {Page} page @param {string} oldUrl @param {string} title @param {FlowOpts & {newUrl?: string|null}} [opts]
  * @returns {Promise<string>} resultado legible
  */
 export async function eliminarVieja(page, oldUrl, title, opts = {}) {
@@ -752,13 +752,16 @@ export async function eliminarVieja(page, oldUrl, title, opts = {}) {
     const base = opts.base || FB_BASE;
     const url = normalizeItemUrl(oldUrl, base);
     if (!url) return "sin URL de la vieja";
+    const oldId = itemId(url);
+    if (opts.newUrl && itemId(opts.newUrl) === oldId) return "la vieja y la nueva son el mismo ítem; no se eliminó";
     await go(page, url);
     if (!(await itemShowsTitle(page, title))) return "la URL no muestra el título; no se eliminó";
     if (!(await firstVisible([page.getByRole("button", { name: /Marcar como disponible/i })], 5000))) {
       return "la vieja no está agotada; no se eliminó";
     }
     if (opts.dryRun) return "dry-run: no se eliminó";
-    await deleteOpenListing(page);
+    // Por id: la nueva (mismo título) nunca se toca.
+    await deleteFromSellingList(page, cleanTitle(title), base, { itemId: oldId });
     return "eliminada";
   } catch (e) {
     if (e?.name === "CheckpointError") throw e;
@@ -850,7 +853,8 @@ export async function eliminar(page, task, opts = {}) {
   let url = null;
   let remaining = 0;
   if (matchAll) {
-    const { ids, unresolved } = await resolveIds(page, title, base);
+    let { ids, unresolved } = await sellingMenuIds(page, title, base);
+    if (unresolved > 0) ({ ids, unresolved } = await resolveIds(page, title, base));
     if (unresolved > 0) throw new Error(`Hay ${unresolved} tarjeta(s) "${title}" sin id verificable; no adivino`);
     if (ids.length === 0) return { method: "ninguna", url: null, remaining: 0 };
     url = `${base}/marketplace/item/${ids[0]}/`;
@@ -875,7 +879,7 @@ export async function eliminar(page, task, opts = {}) {
   // Marcar como agotado). El camino real es "Tus publicaciones" → "Más opciones para <título>" →
   // "Eliminar publicación". El título exacto ya se verificó en el ítem; el botón lleva el título
   // exacto en su nombre accesible.
-  await deleteFromSellingList(page, title, base, { allowMany: matchAll, dryRun: opts.dryRun });
+  await deleteFromSellingList(page, title, base, { allowMany: matchAll, dryRun: opts.dryRun, itemId: itemId(url) });
   if (opts.dryRun) return { method: "dry-run", url, remaining };
   return { method: "eliminado", url, remaining };
 }
@@ -899,24 +903,82 @@ async function openSellingMenuButtons(page, title, base) {
   return { btns: page.getByRole("button", { name: `Más opciones para ${title}`, exact: true }), n: 0 };
 }
 
+/** Id del ítem del menú "Más opciones" ABIERTO (enlace de "Ver publicación"), o null. @param {Page} page */
+async function openMenuItemId(page) {
+  const href = await page
+    .getByRole("menuitem", { name: /^Ver publicaci[oó]n$/i })
+    .first()
+    .evaluate((e) => {
+      const l = e.closest("a[href]") || e.querySelector("a[href]");
+      return l ? l.getAttribute("href") : null;
+    }, null, { timeout: 5000 })
+    .catch(() => null);
+  return itemId(href);
+}
+
+/**
+ * Ids de TODAS las tarjetas con título EXACTO en "Tus publicaciones", leídos del enlace "Ver
+ * publicación" de su menú "Más opciones" (no pulsa ninguna opción). Tarjeta sin enlace o id
+ * repetido → unresolved. @param {Page} page @param {string} title @param {string} base
+ * @returns {Promise<{ids: string[], unresolved: number}>}
+ */
+export async function sellingMenuIds(page, title, base) {
+  const { btns, n } = await openSellingMenuButtons(page, title, base);
+  /** @type {string[]} */
+  const ids = [];
+  let unresolved = 0;
+  for (let k = 0; k < n; k++) {
+    await btns.nth(k).scrollIntoViewIfNeeded({ timeout: 5000 }).catch(() => {});
+    await pause(600, 1200);
+    await btns.nth(k).click();
+    await pause(800, 1600);
+    const id = await openMenuItemId(page);
+    if (id && !ids.includes(id)) ids.push(id);
+    else unresolved++;
+    await page.keyboard.press("Escape").catch(() => {});
+    await pause(500, 1000);
+  }
+  return { ids, unresolved };
+}
+
 /**
  * Elimina desde "Tus publicaciones" UNA publicación con título EXACTO y verifica que su tarjeta
- * desapareció. Sin allowMany, si hay más de una tarjeta con ese título → Error (no adivina).
- * @param {Page} page @param {string} title @param {string} base @param {{allowMany?: boolean, dryRun?: boolean}} [o]
+ * desapareció. Con `itemId`, elige la tarjeta cuyo menú "Ver publicación" enlaza a ESE ítem (y
+ * pulsa "Eliminar publicación" en ese mismo menú): nunca otra con el mismo título (2026-10-15:
+ * tras reemplazar, la vieja y la nueva comparten título). Sin itemId y con >1 tarjeta (sin
+ * allowMany) → Error (no adivina).
+ * @param {Page} page @param {string} title @param {string} base
+ * @param {{allowMany?: boolean, dryRun?: boolean, itemId?: string|null}} [o]
  */
 export async function deleteFromSellingList(page, title, base, o = {}) {
   const { btns, n } = await openSellingMenuButtons(page, title, base);
   if (n === 0) throw new Error(`No encontré "Más opciones para ${title}" en Tus publicaciones`);
-  if (n > 1 && !o.allowMany) throw new Error(`Hay ${n} tarjetas "${title}" en Tus publicaciones; no adivino cuál eliminar`);
-  await btns.first().scrollIntoViewIfNeeded({ timeout: 5000 }).catch(() => {});
-  await pause();
-  await btns.first().click();
-  await pause(800, 1600);
-  const item = await firstVisible(
-    [page.getByRole("menuitem", { name: DELETE_ITEM_RE }), page.getByRole("button", { name: DELETE_ITEM_RE }), page.getByText(DELETE_ITEM_RE)],
-    8000
-  );
-  if (!item) throw new Error('No encontré "Eliminar publicación" en el menú de la tarjeta');
+  if (n > 1 && !o.allowMany && !o.itemId) throw new Error(`Hay ${n} tarjetas "${title}" en Tus publicaciones; no adivino cuál eliminar`);
+  /** @type {Locator|null} */
+  let item = null;
+  for (let k = 0; k < n && !item; k++) {
+    if (k > 0) await page.keyboard.press("Escape").catch(() => {});
+    await btns.nth(k).scrollIntoViewIfNeeded({ timeout: 5000 }).catch(() => {});
+    await pause(600, 1200);
+    await btns.nth(k).click();
+    await pause(800, 1600);
+    if (o.itemId) {
+      const id = await openMenuItemId(page);
+      if (id !== o.itemId) {
+        if (!id) log(`tarjeta ${k}: el menú no trae enlace "Ver publicación"`);
+        continue;
+      }
+    }
+    item = await firstVisible(
+      [page.getByRole("menuitem", { name: DELETE_ITEM_RE }), page.getByRole("button", { name: DELETE_ITEM_RE }), page.getByText(DELETE_ITEM_RE)],
+      8000
+    );
+    if (!item) throw new Error('No encontré "Eliminar publicación" en el menú de la tarjeta');
+  }
+  if (!item) {
+    await page.keyboard.press("Escape").catch(() => {});
+    throw new Error(`Ninguna de las ${n} tarjeta(s) "${title}" es el ítem ${o.itemId}; no elimino nada`);
+  }
   if (o.dryRun) {
     log('dry-run: encontré "Eliminar publicación", NO se hizo clic');
     await page.keyboard.press("Escape").catch(() => {});

@@ -74,14 +74,14 @@ ${bannerId ? `<div class="promo"><span>Promociona tu publicación</span><a href=
 <script>
 const T=${JSON.stringify(Object.fromEntries(listings))};
 let pick=null;
-function openMenu(id){pick=id;document.getElementById("cm").hidden=false}
+function openMenu(id){pick=id;document.getElementById("cmv").setAttribute("href","/marketplace/item/"+id+"/");document.getElementById("cm").hidden=false}
 function delPick(){document.getElementById("cm").hidden=true;document.getElementById("cd").hidden=false}
 function okDel(){document.getElementById("cd").hidden=true;fetch('/__deleted/'+pick,{method:'POST'})}
 function openDlg(id){const d=document.createElement("div");d.setAttribute("role","dialog");
 d.innerHTML='<h2>Tu publicación</h2><span></span><a href="/marketplace/item/'+id+'/">Ver publicación</a>';
 d.querySelector("span").textContent=T[id];document.body.appendChild(d);}
 </script>
-<div role="menu" id="cm" hidden><div role="menuitem">Ver publicación</div><div role="menuitem" onclick="delPick()">Eliminar publicación</div></div>
+<div role="menu" id="cm" hidden><a role="menuitem" id="cmv" href="#">Ver publicación</a><div role="menuitem" onclick="delPick()">Eliminar publicación</div></div>
 <div role="dialog" id="cd" hidden><span>¿Eliminar esta publicación?</span><div role="button" tabindex="0" onclick="okDel()">Eliminar</div></div>
 </body></html>`;
 };
@@ -358,6 +358,24 @@ test("reemplazar: vieja ambigua (2 exactas) → NeedsHumanError y NO publica", {
   assert.equal(submits.length, nSubmits);
   assert.deepEqual(sold, []);
   await page.close();
+});
+
+test("reemplazar con el MISMO título: elimina la vieja por su id y nunca la nueva (aunque la nueva salga primero)", { timeout: 300_000 }, async () => {
+  const SAME = "Lentes de sol bloo · Tortuguero · Negro · Gris";
+  listings = new Map([["999", "(placeholder)"], ...[...listings].filter(([id]) => id !== "999"), ["820", SAME]]);
+  const page = await context.newPage();
+  sold.length = 0;
+  deleted.length = 0;
+  const t = { ...reemplazarTask(), oldTitle: SAME, kit: { ...reemplazarTask().kit, title: SAME } };
+  const r = await runTask(page, t, { base, files, deadline: Date.now() + 600_000 });
+  assert.equal(r.status, "hecha");
+  assert.deepEqual(sold, ["820"]);
+  assert.deepEqual(deleted, ["820"]); // la vieja, por id
+  assert.equal(listings.get("999"), SAME); // la nueva sigue
+  assert.equal(r.error, undefined);
+  await page.close();
+  resetListings();
+  deleted.length = 0;
 });
 
 const ITEM = () => `${base}/marketplace/item/555/`;
