@@ -71,6 +71,12 @@ export function esMatchAll(action: string, title: string | null | undefined): bo
   return action === "eliminar" && (title ?? "").replace(/\s+/g, " ").trim() === TITULO_MANUALES_MATCH_ALL;
 }
 export const NOTA_ELIMINADA = "eliminada en Marketplace";
+
+/** Interruptor de emergencia (dueño 2026-10-15): ROBOT_REEMPLAZAR_OFF=1 → no se reparte
+ *  ningún 'reemplazar' (quedan pendientes) hasta verificar que no deja duplicados. */
+export function reemplazarApagado(env: NodeJS.ProcessEnv = process.env): boolean {
+  return /^(1|true|on|si|sí)$/i.test((env.ROBOT_REEMPLAZAR_OFF ?? "").trim());
+}
 export const TASK_STATUSES = ["pendiente", "en_proceso", "hecha", "fallida", "cancelada"] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 export const TASK_ABIERTAS: TaskStatus[] = ["pendiente", "en_proceso"];
@@ -494,6 +500,7 @@ export async function contarListasPorAccion(): Promise<{ publicar: number; quita
   const rows = await prisma.$queryRaw<{ action: string; n: number }[]>`
     SELECT q."action", COUNT(*)::int AS n FROM ${SCHEMA}."MarketplaceTask" q
      WHERE q."status" = 'pendiente' AND q."attempts" < ${ROBOT_MAX_ATTEMPTS} AND NOT ${esperandoFoto(estucheOk)}
+       AND (${!reemplazarApagado()} OR q."action" <> 'reemplazar')
      GROUP BY q."action"`;
   const out = { publicar: 0, quitar: 0, reemplazar: 0, eliminar: 0 };
   for (const r of rows) if (r.action in out) out[r.action as keyof typeof out] = r.n;
@@ -598,6 +605,7 @@ export async function reclamarSiguiente(): Promise<{
           WHERE q."status" = 'pendiente' AND q."attempts" < ${ROBOT_MAX_ATTEMPTS}
             AND NOT ${esperandoFoto(estucheOk)}
             AND (${!publicarCerrado} OR q."action" <> 'publicar')
+            AND (${!reemplazarApagado()} OR q."action" <> 'reemplazar')
           ORDER BY (q."action" = 'publicar') DESC, (q."action" = 'quitar') DESC, (q."action" = 'eliminar') DESC, q."createdAt" ASC, q."id" ASC
           LIMIT 1
           FOR UPDATE SKIP LOCKED

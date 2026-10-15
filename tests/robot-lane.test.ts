@@ -81,3 +81,10 @@ test("eliminar matchAll: SOLO el título exacto de los manuales del dueño", () 
   assert.equal(esMatchAll("quitar", "Lentes de sol Bloo"), false);
   assert.equal(esMatchAll("eliminar", null), false);
 });
+
+test("ROBOT_REEMPLAZAR_OFF apaga el reparto de 'reemplazar'", async () => {
+  const { reemplazarApagado } = await import("@/lib/marketplace/tasks");
+  assert.equal(reemplazarApagado({ ROBOT_REEMPLAZAR_OFF: "1" } as unknown as NodeJS.ProcessEnv), true);
+  assert.equal(reemplazarApagado({ ROBOT_REEMPLAZAR_OFF: "" } as unknown as NodeJS.ProcessEnv), false);
+  assert.equal(reemplazarApagado({} as unknown as NodeJS.ProcessEnv), false);
+});
