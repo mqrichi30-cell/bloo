@@ -58,7 +58,10 @@ export async function runTask(page, task, opts = {}) {
     const result = r.externalUrl
       ? { status: "hecha", externalUrl: r.externalUrl }
       : { status: "hecha", error: "Publicada, pero no ubiqué la URL en Tus publicaciones" };
-    const boost = await boostAfter(page, r.externalUrl, task.boost, opts, task.kit?.title);
+    // Solo 'publicar' (par nuevo del día) paga pauta (dueño 2026-10-14). El
+    // servidor ya manda boost=null en 'reemplazar'; esto es la segunda llave.
+    const boost = task.action === "publicar" ? await boostAfter(page, r.externalUrl, task.boost, opts, task.kit?.title) : undefined;
+    if (task.action !== "publicar" && task.boost) log("reemplazar: llegó boost y se ignora (solo 'publicar' paga)");
     if (boost) {
       result.boost = boost;
       log(`pauta: ${boost.status}${boost.detail ? ` (${boost.detail})` : ""}`);

@@ -12,8 +12,10 @@
 //                                                   esperando hero o la foto fija
 //                                                   del estuche
 //   { task: null, ocupado: true, pendientes }     — otra corrida tiene lease vigente
-//   { task: null, espera: true, nextDueAt }       — ritmo: hubo una 'hecha' hace < 110 min
-//   { task: { id, action, listingId, externalUrl, oldTitle, kit, images, boost } }
+//   { task: null, espera: true, nextDueAt }       — ritmo: hubo una 'hecha' hace < 50 min
+//                                                   o el slot diario de 'publicar' está cerrado
+//   { task: { id, action, listingId, externalUrl, oldTitle, kit, images, boost }, lane }
+//     lane: 'diaria' (publicar) | 'rapida' (reemplazar/quitar; boost siempre null).
 //     action: publicar | quitar | reemplazar. Contrato en tasks.ts#RobotTaskPayload.
 import { NextResponse } from "next/server";
 import { requireCronSecret } from "@/lib/marketplace/cron-auth";
@@ -21,6 +23,7 @@ import { runMarketplaceSync } from "@/lib/marketplace/sync";
 import { writeAudit } from "@/lib/audit";
 import {
   armarPayload,
+  carrilDe,
   contarEsperandoFotos,
   contarPendientes,
   estadoRobot,
@@ -66,13 +69,14 @@ export async function POST(request: Request) {
       entidadId: task.id,
       detalle: {
         action: task.action,
+        lane: carrilDe(task.action),
         listingId: task.listingId,
         imagenes: task.images.length,
         oldTitle: task.oldTitle,
         boost: task.boost,
       },
     });
-    return NextResponse.json({ task });
+    return NextResponse.json({ task, lane: carrilDe(task.action) });
   } catch (error) {
     const msg = error instanceof Error ? error.message : "Error desconocido";
     console.error("[robot next] excepción:", msg);

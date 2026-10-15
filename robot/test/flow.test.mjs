@@ -217,19 +217,19 @@ const reemplazarTask = (boost = null) => ({
   action: "reemplazar",
   oldTitle: OLD_R,
   externalUrl: null,
-  kit: { ...task.kit, title: NEW_R },
+  kit: { ...task.kit, title: NEW_R, priceColones: 17500 },
   images: ["https://x/1.jpg", "https://x/2.jpg"],
   boost,
 });
 
-test("reemplazar: quita la vieja (título exacto), publica la nueva con 2 fotos y pauta dry → simulado", { timeout: 240_000 }, async () => {
+test("reemplazar: quita la vieja (título exacto), publica la nueva con 2 fotos y precio 17500, SIN pauta aunque llegue boost", { timeout: 240_000 }, async () => {
   const page = await context.newPage();
   sold.length = 0;
   boostScenario = "ok";
   const nSubmits = submits.length;
   const nBoosts = boosts.length;
   const ev = [];
-  const r = await runTask(page, reemplazarTask({ mode: "dry", amountCrc: 500 }), {
+  const r = await runTask(page, reemplazarTask({ mode: "on", amountCrc: 500 }), {
     base,
     files,
     deadline: Date.now() + 600_000,
@@ -240,13 +240,13 @@ test("reemplazar: quita la vieja (título exacto), publica la nueva con 2 fotos 
   assert.equal(submits.at(-1).titulo, NEW_R);
   assert.deepEqual(submits.at(-1).fotos, ["foto-01-lente.png", "foto-02-estuche.png"]);
   assert.equal(submits.at(-1).promo, false); // ensureNoPromote sigue en el formulario
+  assert.equal(submits.at(-1).precio, "17500"); // el reemplazo también corrige el precio
   assert.equal(r.status, "hecha");
   assert.equal(r.externalUrl, `${base}/marketplace/item/999/`);
-  assert.equal(r.boost.status, "simulado", JSON.stringify(r.boost));
-  assert.equal(r.boost.amountCrc, 500);
-  assert.match(r.boost.detail, /₡500 CRC/);
-  assert.equal(boosts.length, nBoosts); // dry: NO se pulsó pagar
-  assert.ok(ev.some((n) => /pauta dry-run: total verificado ₡500 CRC/.test(n)), "captura del dry");
+  // Dueño 2026-10-14: reemplazar NUNCA paga, ni con boost 'on' en la tarea.
+  assert.equal(r.boost, undefined, JSON.stringify(r.boost));
+  assert.equal(boosts.length, nBoosts);
+  assert.ok(!ev.some((n) => /pauta/.test(n)), "no se abrió el flujo de pauta");
   await page.close();
 });
 

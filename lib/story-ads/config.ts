@@ -111,12 +111,13 @@ export function metaAdsCredenciales(env: NodeJS.ProcessEnv = process.env): MetaA
 }
 
 /** ¿Se crea la fila de campaña al publicar un 'publicar'? Solo si el modo no
- *  es off. Los 'reemplazar' (re-publicar pares viejos) NO disparan campaña
- *  salvo STORY_ADS_INCLUIR_REEMPLAZO=1: son 57 pares que ya estaban a la venta. */
+ *  es off. 'reemplazar' y 'quitar' NUNCA disparan campaña (dueño 2026-10-14:
+ *  la plata es solo para el par nuevo del día). Antes existía la llave
+ *  STORY_ADS_INCLUIR_REEMPLAZO=1; se quitó a propósito: ya no se puede activar
+ *  por env. */
 export function disparaCampana(action: string, env: NodeJS.ProcessEnv = process.env): boolean {
   if (storyAdsMode(env) === "off") return false;
-  if (action === "publicar") return true;
-  return action === "reemplazar" && env.STORY_ADS_INCLUIR_REEMPLAZO?.trim() === "1";
+  return action === "publicar";
 }
 
 /** 00:00 de hoy en Costa Rica (UTC−6 fijo), en UTC. Copia de

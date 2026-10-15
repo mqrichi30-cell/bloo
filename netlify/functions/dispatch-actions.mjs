@@ -3,8 +3,9 @@
 // 31 h). Netlify sí es puntual.
 //
 // Cada hora:
-//  - robot de Marketplace: solo si el servidor dice due=true (1 tarea/110 min)
-//    y no está pausado. El servidor vuelve a validar el ritmo en /api/robot/next.
+//  - robot de Marketplace: solo si el servidor dice due=true y no está pausado.
+//    `lane`: 'rapida' (reemplazar/quitar, ~1/h cuando está libre) o 'diaria'
+//    (publicar nuevo, 7am CR). El servidor vuelve a validar el ritmo en /api/robot/next.
 //  - fotos (imagegen): en horas UTC pares, solo si hay imágenes pendientes.
 //
 // GH_DISPATCH_TOKEN: token fine-grained limitado al repo bloo, Actions: write.
@@ -42,7 +43,7 @@ export default async () => {
   try {
     const robot = await getJson(`${base}/api/robot/pending-count`, secret);
     if (robot.due && !robot.paused) {
-      log.push(`robot: dispatch ${await dispatch("marketplace-robot.yml", token, { dry_run: "false" })}`);
+      log.push(`robot[${robot.lane ?? "?"}]: dispatch ${await dispatch("marketplace-robot.yml", token, { dry_run: "false" })}`);
     } else {
       log.push(`robot: no toca (pendientes=${robot.pendientes} paused=${robot.paused} due=${robot.due})`);
     }

@@ -1,5 +1,5 @@
-// Cola de tareas del robot de Marketplace (Playwright en GitHub Actions, cada
-// 2h, UNA tarea por corrida). Reglas del dueño (2026-09-25), textuales:
+// Cola de tareas del robot de Marketplace (Playwright en GitHub Actions, ~1/h,
+// UNA tarea por corrida). Reglas del dueño (2026-09-25), textuales:
 //
 //  · Se trabaja de la tarea MÁS VIEJA a la más nueva, una por corrida.
 //  · Cada corrida primero re-revisa inventario (runMarketplaceSync) y encola
@@ -21,7 +21,8 @@
 //
 // 'reemplazar' (2026-10-06): el robot quita la publicación vieja por su
 // título exacto (oldTitle = ChannelListing.publishedTitle) y publica la nueva
-// con foto nueva, precio nuevo y pauta, en la misma corrida. El sync NUNCA la
+// con foto nueva y precio nuevo, en la misma corrida — SIN pauta ni historia
+// (dueño 2026-10-14: la plata es solo para el par nuevo del día). El sync NUNCA la
 // crea: la crea a mano scripts/2026-10-06-reemplazo-publicaciones.ts. El sync
 // solo la respeta mientras la publicación siga 'publicado' con stock, y la
 // cancela si deja de serlo (ej. se agotó → 'quitar' con el título viejo).
@@ -59,15 +60,30 @@ export const TASK_ABIERTAS: TaskStatus[] = ["pendiente", "en_proceso"];
 
 export const ROBOT_MAX_ATTEMPTS = 3;
 export const ROBOT_LEASE_MINUTES = 30;
-/** Ritmo del dueño: como máximo UNA tarea ejecutada ('hecha', publicar o
- *  quitar, por doneAt) cada 110 min. Se aplica en el servidor porque el cron
- *  de GitHub descarta corridas y el Action se agenda más seguido: el ritmo no
- *  puede depender de cuántas corridas lleguen. Fallidas no cuentan (no
- *  llegaron a Facebook). */
-export const ROBOT_PACING_MINUTES = 110;
-/** Ritmo de publicaciones (publicar/reemplazar), decisión 2026-10-07: una al
+/** Ritmo general: como máximo UNA tarea ejecutada ('hecha', cualquier acción,
+ *  por doneAt) cada ROBOT_PACING_MINUTES. Se aplica en el servidor porque el
+ *  cron de GitHub descarta corridas y el Action se agenda más seguido: el
+ *  ritmo no puede depender de cuántas corridas lleguen. Fallidas no cuentan
+ *  (no llegaron a Facebook).
+ *  Historia: 110 min (2026-09-25). Dueño 2026-10-14: arreglar YA las
+ *  publicadas → carril rápido (reemplazar/quitar) ~1 por hora. 50 y no 60:
+ *  el despachador corre a :05 y el cron de GitHub a :17; con 60 una tarea
+ *  terminada a :12 perdería la corrida de la hora siguiente y el ritmo real
+ *  quedaría en ~2 h. Con 50 nunca hay dos tareas en la misma hora. */
+export const ROBOT_PACING_MINUTES = 50;
+/** Carril de una tarea (dueño 2026-10-14):
+ *  · 'diaria' = 'publicar' (par NUEVO): 1 por día a ROBOT_PUBLISH_HORA_CR, con
+ *    la única pauta pagada del día.
+ *  · 'rapida' = 'reemplazar' y 'quitar' (corregir lo ya publicado): cuando el
+ *    robot está libre, solo con el ritmo general. Nunca pautan. */
+export type Carril = "diaria" | "rapida";
+export function carrilDe(action: string): Carril {
+  return action === "publicar" ? "diaria" : "rapida";
+}
+/** Ritmo de publicaciones NUEVAS ('publicar'), decisión 2026-10-07: una al
  *  día para que haya pauta diaria. Env ROBOT_PUBLISH_PACING_MINUTES (default
- *  1440). 'quitar' (stock agotado) no espera esto, solo el ritmo general. */
+ *  1440). Desde 2026-10-14 'reemplazar' ya NO cuenta ni espera este ritmo
+ *  (carril rápido), igual que 'quitar'. */
 export function publishPacingMinutes(): number {
   // Ventana temporal opcional: ROBOT_PUBLISH_PACING_OVERRIDE="<min>@<ISO hasta>" (p. ej. para
   // adelantar UNA publicación); vencida, vuelve sola al ritmo normal sin redeploy.
@@ -77,12 +93,17 @@ export function publishPacingMinutes(): number {
   const n = Number(process.env.ROBOT_PUBLISH_PACING_MINUTES);
   return Number.isFinite(n) && n >= ROBOT_PACING_MINUTES ? n : 1440;
 }
-const ACCIONES_PUBLICAN = ["publicar", "reemplazar"];
+/** Las que consumen el slot diario. Solo 'publicar' (ver carrilDe). */
+const ACCIONES_SLOT_DIARIO = ["publicar"];
 
-/** Pauta pagada en Facebook tras publicar/reemplazar (decisión 2026-10-06).
+/** Pauta pagada en Facebook tras 'publicar' (decisión 2026-10-06; desde
+ *  2026-10-14 solo 'publicar', nunca 'reemplazar' ni 'quitar').
  *  Colones enteros en el contrato con el robot; en la base va en céntimos. */
 export const BOOST_AMOUNT_CRC = 500;
-export const BOOST_MAX_PER_DAY_DEFAULT = 12;
+/** Dueño 2026-10-14: UNA pauta de Marketplace por día. Era 12. */
+export const BOOST_MAX_PER_DAY_DEFAULT = 1;
+/** Tope duro: ROBOT_BOOST_MAX_PER_DAY no puede subirlo (plata). */
+export const BOOST_MAX_PER_DAY_TOPE = 1;
 export type BoostMode = "dry" | "on";
 export interface BoostReporte {
   status: BoostStatus;
@@ -367,8 +388,8 @@ export async function contarListas(): Promise<number> {
 }
 
 /** Cuándo se puede ejecutar la próxima tarea según el ritmo (null = ya).
- *  `general`: cualquier acción (110 min tras la última 'hecha').
- *  `publicar`: publicar/reemplazar (publishPacingMinutes tras la última que publicó). */
+ *  `general`: cualquier acción (ROBOT_PACING_MINUTES tras la última 'hecha').
+ *  `publicar`: slot diario de 'publicar' (solo cuenta la última 'publicar'). */
 export async function ritmoRobot(
   db: Prisma.TransactionClient | typeof prisma = prisma
 ): Promise<{ general: Date | null; publicar: Date | null }> {
@@ -379,7 +400,7 @@ export async function ritmoRobot(
       select: { doneAt: true },
     }),
     db.marketplaceTask.findFirst({
-      where: { status: "hecha", doneAt: { not: null }, action: { in: ACCIONES_PUBLICAN } },
+      where: { status: "hecha", doneAt: { not: null }, action: { in: ACCIONES_SLOT_DIARIO } },
       orderBy: { doneAt: "desc" },
       select: { doneAt: true },
     }),
@@ -420,17 +441,48 @@ export function proximoSlotDiario(ultima: Date | null, hora: number, ahora: Date
   return new Date(slotUtc + DIA);
 }
 
-/** Próxima vez que hay algo ejecutable (null = ya hay): combina el ritmo con lo que está en cola. */
-export async function proximaHabilitada(
-  db: Prisma.TransactionClient | typeof prisma = prisma
-): Promise<Date | null> {
-  const r = await ritmoRobot(db);
-  if (r.general) return r.general;
-  if (!r.publicar) return null;
-  const quitar = await db.marketplaceTask.count({
-    where: { status: "pendiente", action: "quitar", attempts: { lt: ROBOT_MAX_ATTEMPTS } },
-  });
-  return quitar > 0 ? null : r.publicar;
+export interface DecisionCarril {
+  /** true = vale la pena despachar el robot ya. */
+  due: boolean;
+  /** Carril de la tarea que se repartiría (null si no toca nada). */
+  lane: Carril | null;
+  /** Cuándo vuelve a tocar algo (null = ya, o no hay nada en cola). */
+  nextDueAt: Date | null;
+}
+
+/**
+ * Decisión pura (testeable) de qué carril toca, con el MISMO orden que el
+ * claim: quitar → publicar (si su slot diario está abierto) → reemplazar.
+ * `listas` = pendientes repartibles ya (no esperan foto), por acción.
+ */
+export function decidirCarril(
+  ritmo: { general: Date | null; publicar: Date | null },
+  listas: { publicar: number; quitar: number; reemplazar: number }
+): DecisionCarril {
+  const hay = listas.publicar + listas.quitar + listas.reemplazar > 0;
+  if (ritmo.general) return { due: false, lane: null, nextDueAt: hay ? ritmo.general : null };
+  if (listas.quitar > 0) return { due: true, lane: "rapida", nextDueAt: null };
+  if (listas.publicar > 0 && !ritmo.publicar) return { due: true, lane: "diaria", nextDueAt: null };
+  if (listas.reemplazar > 0) return { due: true, lane: "rapida", nextDueAt: null };
+  return { due: false, lane: null, nextDueAt: listas.publicar > 0 ? ritmo.publicar : null };
+}
+
+/** Pendientes repartibles ya (no esperan foto), por acción. */
+export async function contarListasPorAccion(): Promise<{ publicar: number; quitar: number; reemplazar: number }> {
+  const estucheOk = await estucheDisponible();
+  const rows = await prisma.$queryRaw<{ action: string; n: number }[]>`
+    SELECT q."action", COUNT(*)::int AS n FROM ${SCHEMA}."MarketplaceTask" q
+     WHERE q."status" = 'pendiente' AND q."attempts" < ${ROBOT_MAX_ATTEMPTS} AND NOT ${esperandoFoto(estucheOk)}
+     GROUP BY q."action"`;
+  const out = { publicar: 0, quitar: 0, reemplazar: 0 };
+  for (const r of rows) if (r.action in out) out[r.action as keyof typeof out] = r.n;
+  return out;
+}
+
+/** Qué carril toca ahora (para /api/robot/pending-count y el despachador). */
+export async function carrilActual(): Promise<DecisionCarril> {
+  const [ritmo, listas] = await Promise.all([ritmoRobot(), contarListasPorAccion()]);
+  return decidirCarril(ritmo, listas);
 }
 
 /** Pendientes que no se reparten todavía: su hero se está (re)generando o
@@ -469,7 +521,7 @@ interface TareaReclamada {
 export async function reclamarSiguiente(): Promise<{
   tarea: TareaReclamada | null;
   ocupado: boolean;
-  /** Fijado = no toca todavía por el ritmo (110 min general / publishPacingMinutes al publicar); no se reclamó nada. */
+  /** Fijado = no toca todavía por el ritmo (ROBOT_PACING_MINUTES general / slot diario de publicar); no se reclamó nada. */
   nextDueAt: Date | null;
 }> {
   // Fuera de la transacción: es un HEAD HTTP, no se sostiene el lock por él.
@@ -481,7 +533,8 @@ export async function reclamarSiguiente(): Promise<{
     // pasar las dos el control de ritmo.
     const ritmo = await ritmoRobot(tx);
     if (ritmo.general) return { tarea: null, ocupado: false, nextDueAt: ritmo.general };
-    const soloQuitar = ritmo.publicar !== null;
+    // Carril diario cerrado → se reparte solo el carril rápido (quitar/reemplazar).
+    const publicarCerrado = ritmo.publicar !== null;
 
     // 'reemplazar' con lease vencido: terminal + pausa (ver
     // MOTIVO_REEMPLAZO_CORTADO). Va antes del UPDATE genérico.
@@ -523,19 +576,19 @@ export async function reclamarSiguiente(): Promise<{
          SELECT q."id" FROM ${SCHEMA}."MarketplaceTask" q
           WHERE q."status" = 'pendiente' AND q."attempts" < ${ROBOT_MAX_ATTEMPTS}
             AND NOT ${esperandoFoto(estucheOk)}
-            AND (${!soloQuitar} OR q."action" = 'quitar')
-          ORDER BY (q."action" = 'quitar') DESC, q."createdAt" ASC, q."id" ASC
+            AND (${!publicarCerrado} OR q."action" <> 'publicar')
+          ORDER BY (q."action" = 'quitar') DESC, (q."action" = 'publicar') DESC, q."createdAt" ASC, q."id" ASC
           LIMIT 1
           FOR UPDATE SKIP LOCKED
        )
       RETURNING t."id", t."listingId", t."action", t."externalUrl", t."createdAt", t."boostStatus"`;
-    if (!filas[0] && soloQuitar) return { tarea: null, ocupado: false, nextDueAt: ritmo.publicar };
+    if (!filas[0] && publicarCerrado) return { tarea: null, ocupado: false, nextDueAt: ritmo.publicar };
     return { tarea: filas[0] ?? null, ocupado: false, nextDueAt: null };
   });
 }
 
 /** Pauta que se le ofrece al robot. null = no pautar (modo off, tope del
- *  día alcanzado, 'quitar', o esta tarea ya pagó en un intento anterior). */
+ *  día alcanzado, 'quitar'/'reemplazar', o esta tarea ya pagó en un intento anterior). */
 export type RobotBoost = { mode: BoostMode; amountCrc: number } | null;
 
 export interface RobotTaskPayload {
@@ -573,7 +626,7 @@ function boostMaxPorDia(): number {
   const raw = process.env.ROBOT_BOOST_MAX_PER_DAY?.trim();
   if (!raw) return BOOST_MAX_PER_DAY_DEFAULT;
   const n = Number(raw);
-  return Number.isInteger(n) && n >= 0 ? n : BOOST_MAX_PER_DAY_DEFAULT;
+  return Math.min(Number.isInteger(n) && n >= 0 ? n : BOOST_MAX_PER_DAY_DEFAULT, BOOST_MAX_PER_DAY_TOPE);
 }
 
 /** 00:00 de hoy en Costa Rica (UTC−6 fijo, sin horario de verano), en UTC. */
@@ -587,20 +640,33 @@ export function inicioDiaCR(ahora: Date = new Date()): Date {
  * Tope server-side de pautas por día CR: cuenta solo las 'pagado' (es un
  * tope de plata; 'simulado' no gasta). No hace falta reservar cupo al
  * repartir: el claim es serial (advisory lock + una tarea en_proceso a la
- * vez + ritmo de 110 min).
+ * vez + ritmo general ROBOT_PACING_MINUTES).
  */
-async function boostPara(action: TaskAction, boostStatusPrevio: string | null): Promise<RobotBoost> {
-  if (action === "quitar") return null;
+export function decidirBoost(
+  action: string,
+  boostStatusPrevio: string | null,
+  mode: BoostMode | "off",
+  usadosHoy: number,
+  maxPorDia: number
+): RobotBoost {
+  // Solo el par NUEVO del día paga (dueño 2026-10-14). reemplazar/quitar nunca.
+  if (action !== "publicar") return null;
   // Un intento anterior de ESTA tarea ya pagó (después falló otra cosa): no
   // se paga dos veces la misma publicación.
   if (boostStatusPrevio === "pagado") return null;
+  if (mode === "off") return null;
+  if (usadosHoy >= Math.min(maxPorDia, BOOST_MAX_PER_DAY_TOPE)) return null;
+  return { mode, amountCrc: BOOST_AMOUNT_CRC };
+}
+
+async function boostPara(action: TaskAction, boostStatusPrevio: string | null): Promise<RobotBoost> {
+  if (action !== "publicar" || boostStatusPrevio === "pagado") return null;
   const mode = boostModeEnv();
   if (mode === "off") return null;
   const usados = await prisma.marketplaceTask.count({
     where: { boostStatus: "pagado", boostedAt: { gte: inicioDiaCR() } },
   });
-  if (usados >= boostMaxPorDia()) return null;
-  return { mode, amountCrc: BOOST_AMOUNT_CRC };
+  return decidirBoost(action, boostStatusPrevio, mode, usados, boostMaxPorDia());
 }
 
 export async function armarPayload(t: TareaReclamada): Promise<RobotTaskPayload> {

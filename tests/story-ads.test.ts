@@ -51,7 +51,8 @@ test("credenciales: faltan → null; act_ se normaliza", () => {
 test("disparo: solo 'publicar'; reemplazar con opt-in; off nunca", () => {
   assert.equal(disparaCampana("publicar", env({})), true);
   assert.equal(disparaCampana("reemplazar", env({})), false);
-  assert.equal(disparaCampana("reemplazar", env({ STORY_ADS_INCLUIR_REEMPLAZO: "1" })), true);
+  // Dueño 2026-10-14: reemplazar nunca crea historia, ni con la llave vieja.
+  assert.equal(disparaCampana("reemplazar", env({ STORY_ADS_INCLUIR_REEMPLAZO: "1" })), false);
   assert.equal(disparaCampana("quitar", env({})), false);
   assert.equal(disparaCampana("publicar", env({ STORY_ADS_MODE: "off" })), false);
 });

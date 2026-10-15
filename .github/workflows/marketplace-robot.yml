@@ -8,7 +8,7 @@ name: marketplace-robot
 on:
   schedule:
     # GitHub descarta muchos cron; se intenta cada hora y el servidor
-    # impone el ritmo real (1 tarea cada ~2 h) con el campo "due".
+    # impone el ritmo real (1 tarea cada >=50 min; publicar nuevo solo 7am CR) con "due".
     - cron: "17 * * * *"
   workflow_dispatch:
     inputs:
