@@ -8,6 +8,14 @@ Detection: lenses are large, smooth, compact regions inside the silhouette (the 
 ring shaped). A reflection shows up as a lens stacked right under another lens with a similar area
 and a vertically flipped shape. A single pair never has stacked lenses (front and 3/4 views put
 them side by side; a second full view of the frame is a separate component, see main_product).
+Shape alone is not enough: a GRADIENT lens (dark top, light bottom: Malinche Te Seco, 2026-10-15)
+splits into a dark upper half and a light lower half whose shapes are mirror images (dome + bowl),
+and the old detector cut the bottom half of the glasses away. So a stacked pair also needs a
+SEPARATION between the two lenses: a band of non-lens material (rim + mirrored rim, i.e. colours
+off the straight line between the two lens colours AND a median colour unlike either lens). Inside one
+lens the band is the tint fading from one colour to the other, maybe crossed by a temple arm seen
+through the glass (Celaje Negro Gris Doble): nothing is cut. A missed reflection is still caught by
+the AI reviewer on the output; a false cut silently ships a different product, so the bias is to keep.
 
 Removal: every silhouette pixel is assigned to the nearest lens seed, upper (real) or lower
 (reflection), by geodesic distance inside the silhouette. The two halves only touch at the
@@ -32,6 +40,10 @@ X_OVERLAP_MIN = 0.6    # of the narrower lens
 AREA_RATIO = (0.4, 2.5)
 FLIP_IOU_MIN = 0.4    # weak on its own (any two ellipses score ~0.5): stacking is the real signal
 GAP_MIN = 0.15        # of the upper lens height: rim + mirrored rim sit between the two lenses
+RIM_OFF_MIN = 12.0     # Lab distance of the band to the lens->lens colour line (gradient ~6, rims 25+)
+BAND_LENS_MIN = 8.0    # Lab distance of the band's median colour to the nearest lens colour: rims ~12-30,
+                       # a gradient lens with a temple arm seen through it (Celaje Negro) ~3.5
+MAX_REMOVED = 0.6      # a reflection is at most ~half the silhouette: cutting more = a wrong split
 DUP_COMPONENT_MIN = 0.35  # second silhouette component >= 35 % of the largest = a second object
 
 
@@ -102,7 +114,7 @@ def _flip_iou(up: Lens, low: Lens) -> float:
 
 
 def stacked_pairs(lenses: list[Lens]) -> list[tuple[Lens, Lens, float]]:
-    """(upper, lower, flip IoU) for every lens with a mirrored lens right under it."""
+    """(upper, lower, flip IoU) for every lens with a mirrored lens right under it (shape only)."""
     pairs = []
     for up in lenses:
         for low in lenses:
@@ -124,6 +136,56 @@ def stacked_pairs(lenses: list[Lens]) -> list[tuple[Lens, Lens, float]]:
             if fi >= FLIP_IOU_MIN:
                 pairs.append((up, low, fi))
     return pairs
+
+
+def separation(up: Lens, low: Lens, lab: np.ndarray, a: np.ndarray) -> dict[str, float]:
+    """What lies between the two lenses, column by column (WORK scale).
+    off = median over columns of the 90th-percentile Lab distance of the band pixels to the segment
+    between the two lens mean colours; lens = median over columns of the Lab distance of the band's
+    median colour to the nearest lens colour; gap = share of columns whose band crosses background."""
+    cu, cl = lab[up.mask].mean(0), lab[low.mask].mean(0)
+    d = cl - cu
+    dd = float(d @ d) + 1e-6
+    offs: list[float] = []
+    lens: list[float] = []
+    gaps = 0
+    cols = np.nonzero(up.mask.any(0) & low.mask.any(0))[0]
+    for x in cols:
+        yu = int(np.nonzero(up.mask[:, x])[0].max())
+        yl = int(np.nonzero(low.mask[:, x])[0].min())
+        if yl - yu < 2:
+            continue
+        band = lab[yu + 1:yl, x]
+        t = np.clip(((band - cu) @ d) / dd, 0, 1)
+        offs.append(float(np.percentile(np.linalg.norm(band - (cu + t[:, None] * d), axis=1), 90)))
+        med = np.median(band, 0)
+        lens.append(float(min(np.linalg.norm(med - cu), np.linalg.norm(med - cl))))
+        gaps += bool((a[yu + 1:yl, x] < 0.5).any())
+    if not offs:
+        return {"off": 0.0, "lens": 0.0, "gap": 0.0}
+    return {"off": round(float(np.median(offs)), 1), "lens": round(float(np.median(lens)), 1),
+            "gap": round(gaps / len(offs), 2)}
+
+
+def mirrored_pairs(rgb: np.ndarray, alpha: np.ndarray) -> list[tuple[Lens, Lens, float]]:
+    """Stacked lens pairs that are a true mirror copy: flipped shape AND a band of rim material
+    between them (never two halves of one gradient lens)."""
+    from .edit import _lab  # local import: edit is heavy and imports the gate stack
+
+    pairs = stacked_pairs(lens_blobs(rgb, alpha))
+    if not pairs:
+        return []
+    _, a = _small(rgb, alpha, WORK)
+    h, w = alpha.shape
+    small = np.asarray(Image.fromarray(np.uint8(np.clip(rgb, 0, 255))).resize((WORK, max(8, round(h * WORK / w))),
+                                                                                Image.BILINEAR))
+    lab = _lab(small)
+    out = []
+    for up, low, fi in pairs:
+        sep = separation(up, low, lab, a)
+        if sep["off"] >= RIM_OFF_MIN and sep["lens"] >= BAND_LENS_MIN:
+            out.append((up, low, fi))
+    return out
 
 
 def _geodesic_labels(mask: np.ndarray, seeds: list[tuple[np.ndarray, int]]) -> np.ndarray:
@@ -160,7 +222,7 @@ def remove_reflection(cut: Image.Image) -> tuple[Image.Image, dict[str, Any]]:
     arr = np.asarray(cut.convert("RGBA")).copy()
     arr[..., 3] = main_product(arr[..., 3])
     alpha = arr[..., 3].astype(np.float32) / 255
-    pairs = stacked_pairs(lens_blobs(arr[..., :3], alpha))
+    pairs = mirrored_pairs(arr[..., :3], alpha)
     info: dict[str, Any] = {"reflection": bool(pairs), "pairs": len(pairs)}
     if not pairs:
         return cut, info
@@ -207,6 +269,9 @@ def remove_reflection(cut: Image.Image) -> tuple[Image.Image, dict[str, Any]]:
     arr[..., 3] = np.uint8(arr[..., 3].astype(np.float32) * keep)
     removed = float(1 - arr[..., 3].astype(np.float32).sum() / max(1.0, float(np.asarray(cut.convert("RGBA"))[..., 3].astype(np.float32).sum())))
     info["removed_frac"] = round(removed, 3)
+    if removed > MAX_REMOVED:  # the split ran through the glasses themselves: keep the source whole
+        info.update(reflection=False, skipped="split would remove %.0f %% of the glasses" % (100 * removed))
+        return cut, info
     out = Image.fromarray(arr, "RGBA")
     bbox = out.getchannel("A").point(lambda v: 255 if v > 8 else 0).getbbox()
     if bbox:
@@ -230,7 +295,7 @@ def duplicate_check(img: Image.Image, alpha: np.ndarray) -> tuple[bool, str, dic
         if sizes[1] >= DUP_COMPONENT_MIN * sizes[0]:
             return False, "second pair of glasses in output", stats
     # 2. a mirrored copy attached to the glasses (stacked lenses)
-    pairs = stacked_pairs(lens_blobs(np.asarray(img.convert("RGB")), a))
+    pairs = mirrored_pairs(np.asarray(img.convert("RGB")), a)
     stats["stacked_lenses"] = len(pairs)
     if pairs:
         return False, "mirror reflection / duplicate of the glasses in output", stats

@@ -20,7 +20,8 @@ from imagegen import edit, reflection, review, run  # noqa: E402
 from imagegen.providers import ProviderError, QuotaExhausted  # noqa: E402
 from test_edit import FakeEditor, FakeReviewer, glasses, scene_with  # noqa: E402
 
-GOOD = {"glasses_count": 1, "reflection_or_duplicate": False, "floating": False, "matches_reference": True,
+GOOD = {"glasses_count": 1, "temple_arms_count": 2, "lens_tint_matches": True, "fully_in_frame": True,
+        "clear_parts_intact": True, "pose_natural": True, "reflection_or_duplicate": False, "floating": False, "matches_reference": True,
         "hands_or_people": False, "added_text_or_logo": False, "scene_ok": True,
         "warped_or_extra_parts": False, "defects": [], "pass": True, "fix_hint": ""}
 
@@ -165,6 +166,199 @@ class ReflectionTests(unittest.TestCase):
         ok, reason, _ = reflection.duplicate_check(comp, both)
         self.assertFalse(ok)
         self.assertIn("second pair", reason)
+
+
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
+
+
+def gradient_shades() -> Image.Image:
+    """Synthetic glasses whose lenses fade dark (top) -> light (bottom), like Malinche Te Seco."""
+    im = shades()
+    arr = np.asarray(im).copy()
+    lens = (arr[..., 0] == 40) & (arr[..., 3] == 255)
+    rows = np.nonzero(lens.any(1))[0]
+    t = (np.arange(arr.shape[0]) - rows.min()) / max(1, rows.max() - rows.min())
+    top, bottom = np.array([90, 30, 25], np.float32), np.array([235, 205, 170], np.float32)
+    col = top + np.clip(t, 0, 1)[:, None] * (bottom - top)
+    for c in range(3):
+        arr[..., c] = np.where(lens, np.uint8(col[:, None, c]), arr[..., c])
+    return Image.fromarray(arr, "RGBA")
+
+
+class RealSourceReflectionTests(unittest.TestCase):
+    """Regression on real Nihao cutouts (BiRefNet output, 512 px wide, tests/fixtures)."""
+
+    def test_malinche_gradient_lens_is_not_a_reflection(self) -> None:
+        # 2026-10-15: the dark top / light bottom of each lens looked like a lens + its mirror image;
+        # the bottom half of the glasses was cut away and GPT drew a half-moon frame 3 times
+        # Celaje Negro Gris Doble (same bug, shipped with the left lens's lower rim cut): its gradient
+        # lens has the clear temple arm seen through it, which looks like a rim band
+        for name in ("malinche-cutout.png", "celaje-negro-cutout.png"):
+            with self.subTest(name):
+                cut = Image.open(FIXTURES / name).convert("RGBA")
+                arr = np.asarray(cut)
+                shape_only = reflection.stacked_pairs(reflection.lens_blobs(arr[..., :3], arr[..., 3] / 255))
+                self.assertTrue(shape_only)  # the shapes alone DO look mirrored: the separation decides
+                out, info = reflection.remove_reflection(cut)
+                self.assertFalse(info["reflection"])
+                self.assertEqual(out.size, cut.size)
+
+    def test_tortuguero_true_reflection_still_cut(self) -> None:
+        cut = Image.open(FIXTURES / "tortuguero-cutout.png").convert("RGBA")
+        out, info = reflection.remove_reflection(cut)
+        self.assertTrue(info["reflection"])
+        self.assertEqual(info["pairs"], 2)
+        self.assertLess(out.height, 0.75 * cut.height)
+        self.assertGreater(out.width, 0.95 * cut.width)  # the whole pair stays, only the copy goes
+
+    def test_synthetic_gradient_lens_untouched(self) -> None:
+        cut = gradient_shades()
+        out, info = reflection.remove_reflection(cut)
+        self.assertFalse(info["reflection"])
+        self.assertEqual(out.size, cut.size)
+        # and its reflection is still found
+        _, info2 = reflection.remove_reflection(with_reflection(cut))
+        self.assertTrue(info2["reflection"])
+
+    def test_gradient_output_not_flagged_as_duplicate(self) -> None:
+        ref = edit.build_reference(Image.open(FIXTURES / "malinche-cutout.png").convert("RGBA"))
+        img, a = scene_with(ref, 2.0, 0.0, (0, 0), size=(1024, 1280))
+        self.assertTrue(reflection.duplicate_check(img, a)[0])
+
+
+class SilhouetteCheckTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.ref = edit.build_reference(Image.open(FIXTURES / "malinche-cutout.png").convert("RGBA"))
+
+    def test_same_glasses_pass(self) -> None:
+        _, a = scene_with(self.ref, 1.7, 4.0, (20, 60), size=(1024, 1280))
+        ok, reason, stats = review.silhouette_check(self.ref.alpha, a)
+        self.assertTrue(ok, (reason, stats))
+
+    def test_half_glasses_fail(self) -> None:
+        _, a = scene_with(self.ref, 1.7, 0.0, (0, 0), size=(1024, 1280))
+        rows = np.nonzero(a.max(1) > 0.5)[0]
+        a = a.copy()
+        a[(rows.min() + rows.max()) // 2:] = 0  # only the top half of the frame (the 2026-10-15 renders)
+        ok, reason, _ = review.silhouette_check(self.ref.alpha, a)
+        self.assertFalse(ok)
+        self.assertIn("silhouette_mismatch", reason)
+
+    def test_missing_lens_fails(self) -> None:
+        _, a = scene_with(self.ref, 1.7, 0.0, (0, 0), size=(1024, 1280))
+        cols = np.nonzero(a.max(0) > 0.5)[0]
+        a = a.copy()
+        a[:, cols.min():cols.min() + (cols.max() - cols.min()) * 2 // 5] = 0  # left lens + rim gone
+        self.assertFalse(review.silhouette_check(self.ref.alpha, a)[0])
+
+    def test_gpt_scene_rejects_half_glasses(self) -> None:
+        _, a = scene_with(self.ref, 1.7, 0.0, (0, 0), size=(1024, 1280))
+        rows = np.nonzero(a.max(1) > 0.5)[0]
+        half = a.copy()
+        half[(rows.min() + rows.max()) // 2:] = 0
+        img, _ = scene_with(self.ref, 1.7, 0.0, (0, 0), size=(1024, 1280))
+        cut = Image.open(FIXTURES / "malinche-cutout.png").convert("RGBA")
+        gpt = mock.Mock(label="gptimage", model="m")
+        gpt.edit.return_value = (img, {"usd": 0.2})
+        rev = mock.Mock()
+        with mock.patch.object(run, "segment_alpha", return_value=half):
+            outs, meta = run.gpt_scene(cut, gpt, rev, "x")
+        self.assertIsNone(outs)
+        self.assertTrue(meta["rejected"])
+        rev.review.assert_not_called()  # rejected locally, no neurons spent
+
+
+class OwnerRejectionChecksTests(unittest.TestCase):
+    """2026-10-15 catalog review: third temple arm, wrong gradient, cropped, erased clear parts, pose."""
+
+    def test_new_review_fields_fail(self) -> None:
+        cases = {"temple_arms_count": (3, "extra_temple_arm=3"), "lens_tint_matches": (False, "lens_gradient_differs"),
+                 "fully_in_frame": (False, "glasses_cropped"), "clear_parts_intact": (False, "clear_parts_erased"),
+                 "pose_natural": (False, "pose_unnatural")}
+        for k, (val, defect) in cases.items():
+            v = review.normalize({**GOOD, k: val})
+            self.assertFalse(v["pass"], k)
+            self.assertIn(defect, v["defects"])
+        self.assertTrue(review.normalize({**GOOD, "temple_arms_count": 1})["pass"])  # far arm hidden: fine
+
+    def test_correction_prompt_covers_new_defects(self) -> None:
+        p = edit.correction_prompt("hero", ["extra_temple_arm=3", "lens_gradient_differs", "glasses_cropped",
+                                            "clear_parts_erased", "pose_unnatural"])
+        for s in ("third arm", "smooth fade", "inside the picture", "transparent", "leans on the folded navy"):
+            self.assertIn(s, p)
+
+    def test_hero_prompt_names_the_rules(self) -> None:
+        p = edit.EDIT_PROMPTS["hero"]
+        for s in ("gradient", "never more than two", "do not erase", "fully inside the picture", "napkin"):
+            self.assertIn(s, p)
+
+    def test_open_edge_detected_and_gate_ignores_the_completed_part(self) -> None:
+        cut = shades()
+        a = np.asarray(cut).copy()
+        a = a[:, : int(a.shape[1] * 0.93)]  # the photo cut the temple arm at the right edge
+        open_cut = Image.fromarray(a, "RGBA")
+        self.assertEqual(edit.open_sides(shades()), ())
+        self.assertEqual(edit.open_sides(open_cut), ("right",))
+        ref = edit.build_reference(open_cut)
+        self.assertEqual(ref.open, ("right",))
+        self.assertIn("right edge", edit.open_edge_prompt(ref.open))
+        # the model completes the arm: output = the full pair, the reference = the cut one
+        full = edit.build_reference(shades())
+        img, out_a = scene_with(full, 1.6, 0.0, (0, 40), size=(1024, 1280))
+        rep = edit.fidelity_gate(ref, img, out_a, True)
+        self.assertTrue(rep.ok, (rep.reason, rep.stats))
+        self.assertEqual(rep.stats.get("open"), ["right"])
+
+    def test_edge_margins(self) -> None:
+        ref = edit.build_reference(shades())
+        _, a = scene_with(ref, 1.6, 0.0, (0, 40), size=(1024, 1280))
+        m = edit.edge_margins((1024, 1280), a, run.OUTPUT_SIZES)
+        self.assertGreater(min(m.values()), edit.EDGE_MARGIN_MIN)
+        _, a2 = scene_with(ref, 1.6, 0.0, (420, 40), size=(1024, 1280))  # pushed out of the right edge
+        self.assertLess(min(edit.edge_margins((1024, 1280), a2, run.OUTPUT_SIZES).values()), edit.EDGE_MARGIN_MIN)
+
+
+class GradientLensRestoreTests(unittest.TestCase):
+    def test_model_gradient_is_not_applied_twice(self) -> None:
+        """Gradient lenses came out with a blown, blocky white bottom: the model's own tint gradient was
+        amplified on top of the supplier's. Every band of the glass must keep the supplier's lightness."""
+        H, W = 200, 300
+        rows = np.linspace(0, 1, H, dtype=np.float32)[:, None, None]
+        real = (np.array([60, 50, 90], np.float32) * (1 - rows) + np.array([200, 195, 215], np.float32) * rows)
+        real = np.broadcast_to(real, (H, W, 3)).copy()
+        gen = real * 0.9 + np.random.default_rng(0).normal(0, 4, (H, W, 1))  # the model drew the same fade
+        lens = np.zeros((H, W), np.float32)
+        lens[20:180, 40:260] = 1.0
+        stats: dict[str, Any] = {}
+        out = edit.see_through(real.copy(), gen, real, lens, stats)
+        st = stats["seeThrough"]
+        self.assertEqual(st["lens"], "see-through", st)
+        self.assertLess(st["band_drift"], 5.0, st)  # the old blend: 20+
+        bottom = (lens > 0.5) & (np.arange(H)[:, None] > 140)
+        self.assertLess(abs(out[bottom].mean() - real[bottom].mean()), 4.0)
+
+
+class CutoutFixTests(unittest.TestCase):
+    def test_fix_applies_only_to_its_source_and_size(self) -> None:
+        from imagegen import cutout_fixes
+        cut = shades()
+        fixes = {"123": {"size": list(cut.size), "erase": [{"pts": [[10, 10], [60, 60]], "hw": 5}], "lens": []}}
+        out, info = cutout_fixes.apply_fix(cut, "https://img/x/123.jpg", fixes)
+        self.assertGreater(info["erased_px"], 0)
+        self.assertFalse(np.array_equal(np.asarray(out), np.asarray(cut)))
+        same, info2 = cutout_fixes.apply_fix(cut, "https://img/x/999.jpg", fixes)
+        self.assertIs(same, cut)
+        small = cut.resize((cut.width // 2, cut.height // 2))
+        _, info3 = cutout_fixes.apply_fix(small, "https://img/x/123.jpg", fixes)
+        self.assertIn("skipped", info3["cutoutFix"])
+
+    def test_shipped_fixes_match_their_cutouts_format(self) -> None:
+        import json
+        from imagegen import cutout_fixes
+        data = json.loads(cutout_fixes.FIXES.read_text(encoding="utf-8"))
+        self.assertIn("2085244610103349248", data)  # Tortuguero Te Claro (third temple arm)
+        for k, v in data.items():
+            self.assertEqual(len(v["size"]), 2, k)
 
 
 class CorrectionPromptTests(unittest.TestCase):

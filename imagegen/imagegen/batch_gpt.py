@@ -75,6 +75,7 @@ CPU = threading.Lock()   # one heavy local step (rembg/BiRefNet, gate) at a time
 DB = threading.Lock()
 BUDGET = threading.Lock()
 STOP = threading.Event()
+NO_TASKS = threading.Event()  # --no-tasks: hero 'lista' without a robot task (visual check first)
 
 
 def load_env_local() -> None:
@@ -513,7 +514,7 @@ def process_color(t: Target, api: BlooApi, gpt: BatchGPT, reviewer: VisionReview
             cut, hand = cut_out(src)
             if hand.has_hand:
                 raise RuntimeError("source_has_hand")
-            cut, _ = clean_cutout(cut)
+            cut, _ = clean_cutout(cut, t.source_url)
         except Exception as e:  # noqa: BLE001 - every row must end reported
             for v in todo:
                 gpt.budget.drop_reserve(v, t.rows[v])
@@ -542,7 +543,9 @@ def process_color(t: Target, api: BlooApi, gpt: BatchGPT, reviewer: VisionReview
             t.results[v] = "lista" if payload["estado"] == "lista" else f"rechazada: {payload.get('error', '')}"[:200]
             log.info("%s · %s · %s -> %s in %.0fs; %s", t.nombre, t.color, v, t.results[v],
                      time.monotonic() - t0, mem_info() or "")
-            if v == "hero" and payload["estado"] == "lista":
+            if v == "hero" and payload["estado"] == "lista" and NO_TASKS.is_set():
+                t.task = "sin tarea: --no-tasks (verificacion visual antes de encolar)"
+            elif v == "hero" and payload["estado"] == "lista":
                 with DB, connect() as c:
                     t.task = enqueue_task(c, t)
                 log.info("%s · %s: %s", t.nombre, t.color, t.task)
@@ -564,6 +567,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--limit", type=int, default=0, help="only the first N colors (0 = all)")
     ap.add_argument("--retry-failed", action="store_true",
                     help="colors whose new hero is not 'lista': new row + new render, prompt with the last defects")
+    ap.add_argument("--no-tasks", action="store_true",
+                    help="do not enqueue robot tasks for new heroes (enqueue after a visual check)")
+    ap.add_argument("--enqueue", nargs="*", metavar="MODEL_ID",
+                    help="only enqueue the robot task for these colors (their new hero is 'lista'), then exit")
     a = ap.parse_args(argv)
     setup_logging()
     load_env_local()
@@ -582,6 +589,17 @@ def main(argv: list[str] | None = None) -> int:
     targets += [t for lid, t in done.items() if lid not in {x.listing_id for x in fresh}]
     if done:
         log.info("state: %d colors already started, %d new", len(done), len(new))
+    if a.enqueue is not None:
+        with connect() as c:
+            for t in targets:
+                if t.model_id in set(a.enqueue) and t.results.get("hero") == "lista":
+                    t.task = enqueue_task(c, t)
+                    log.info("%s · %s: %s", t.nombre, t.color, t.task)
+        STATE.write_text(json.dumps({"tag": TAG, "targets": [asdict(t) for t in targets]}, indent=1,
+                                    ensure_ascii=False), encoding="utf-8")
+        return 0
+    if a.no_tasks:
+        NO_TASKS.set()
     if a.retry_failed:
         for t in targets:
             for v in VARIANTS:

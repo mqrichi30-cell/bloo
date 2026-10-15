@@ -43,9 +43,18 @@ LINEN_MIN = 0.30        # fraction of non-product pixels that must read as beige
 
 _KEEP = ("Keep the sunglasses exactly as they are in image 0: same position in the frame, same size, same "
          "viewing angle and pose, same frame shape, frame color and pattern, lens tint, temple arms and "
-         "hinge details. Do not redesign, restyle, rotate or duplicate them. The lenses are real see-through "
-         "tinted glass: the linen, its weave and the soft shadows behind them stay visible through the lenses, "
+         "hinge details. Do not redesign, restyle, rotate or duplicate them. Preserve the exact lens tint of "
+         "image 0, including its gradient: if the lenses fade from dark at the top to lighter at the bottom, "
+         "keep that same smooth fade, same colours and same direction. Exactly the temple arms visible in "
+         "image 0 (never more than two): no extra arm, no extra lens. Clear or transparent parts of the frame "
+         "and lenses stay visible and intact: do not erase them or fill them with background. The lenses are "
+         "real see-through tinted glass: the linen and the soft shadows behind them show through faintly, "
          "dimmed by the unchanged lens tint.")
+# 2026-10-15 owner rejections: cropped glasses, propped/unnatural pose
+_PLACE = ("The whole pair of sunglasses stays fully inside the picture with clear empty margin on every side: "
+          "no rim or temple tip touches or crosses the image edge. Keep the pose of image 0 and make it "
+          "physically natural: the temple tips and the bottom of the rims rest on the linen with soft contact "
+          "shadows; if the front of the frame is raised, it leans on the edge of the folded navy linen napkin. ")
 _TAIL = ("Warm soft natural window daylight, gentle shallow depth of field, crisp focus on the sunglasses, "
          "photoreal editorial product photograph, quiet coastal old-money mood. No text, no logos, no hands.")
 
@@ -54,7 +63,7 @@ EDIT_PROMPTS: dict[str, str] = {
              "rest on a natural beige linen tablecloth with a fine visible weave, the table surface continuing "
              "under and around them in matching perspective, with a soft realistic contact shadow directly "
              "beneath the frame and temple tips. Softly out of focus in the background: a folded navy linen "
-             "napkin and one monstera leaf. " + _TAIL),
+             "napkin and one monstera leaf. " + _PLACE + _TAIL),
     "flatlay": ("Edit image 0: replace only the plain white background. " + _KEEP + " New scene: the "
                 "sunglasses lie on natural beige linen that fills the whole frame, fine weave visible, a few "
                 "soft folds, a soft contact shadow under the frame. A small navy ceramic dish out of focus in "
@@ -121,6 +130,18 @@ _FIXES: list[tuple[tuple[str, ...], str]] = [
     (("text", "watermark", "logo"), "No text, letters, watermark or logo anywhere in the image."),
     (("warped", "extra"), "No warped or melted parts, no extra temple arms, no extra lenses."),
     (("too large",), "Keep the sunglasses at the same size as in image 0, with space around them."),
+    (("temple_arm", "temple arm"), "Exactly two temple arms in total, as in image 0; no third arm, no stray "
+                                   "bar behind or below the frame."),
+    (("gradient", "tint"), "The lens tint and its gradient are exactly those of image 0: same colours, same "
+                           "smooth fade, no washed-out or blotchy areas."),
+    (("cropped", "margin", "edge"), "The whole pair, including both temple tips, stays inside the picture with "
+                                    "clear margin on every side."),
+    (("clear_parts", "transparent"), "Clear and transparent parts of the frame and lenses stay visible and "
+                                     "intact."),
+    (("pose_unnatural",), "The glasses rest naturally: temple tips and rims touch the linen with contact "
+                          "shadows; a raised front leans on the folded navy napkin."),
+    (("open edge", "cut by the photo"), "Continue the temple arm that is cut by the edge of image 0 to its full "
+                                        "natural length, inside the picture."),
 ]
 _SCENE_FIX = {
     "hero": "The scene must clearly show the beige linen, a folded navy linen napkin and one monstera leaf.",
@@ -180,6 +201,29 @@ class Reference:
     cutout: Image.Image      # full-resolution RGBA product (for the pixel restore)
     box: tuple[int, int, int, int]  # where the full-res cutout sits inside the REF canvas (l, t, r, b)
     lens: np.ndarray | None = None  # glass mask on `cutout` (0..1), computed lazily by lens_of()
+    open: tuple[str, ...] = ()      # sides where the SOURCE photo cuts the product (open_sides)
+
+
+OPEN_EDGE_MIN_PX = 4   # solid pixels on the cutout's outermost row/column = the photo cut the product there
+
+
+def open_sides(cut: Image.Image) -> tuple[str, ...]:
+    """Sides where the product runs off the supplier photo (Ballena Carey Azul: the near temple arm is cut
+    by the right edge). cut_out pads its crop by 6 px, so a product inside the photo never has solid
+    pixels on the crop's border."""
+    a = np.asarray(cut.convert("RGBA").getchannel("A")) > 200
+    edges = {"left": a[:, 0], "right": a[:, -1], "top": a[0, :], "bottom": a[-1, :]}
+    return tuple(k for k, v in edges.items() if int(v.sum()) >= OPEN_EDGE_MIN_PX)
+
+
+def open_edge_prompt(sides: tuple[str, ...]) -> str:
+    """Prompt addition: complete the part the supplier photo cut off (the gate ignores that part)."""
+    if not sides:
+        return ""
+    where = " and ".join(sides)
+    return (f" In image 0 the sunglasses are cut off by the {where} edge of the photo (open edge): continue "
+            f"that part, usually a temple arm, to its full natural length with the same width, colour and "
+            f"pattern, ending in a normal temple tip that rests on the linen, completely inside the picture.")
 
 
 def build_reference(cut: Image.Image, margin: float = 0.10, side: int = REF_SIDE) -> Reference:
@@ -200,7 +244,25 @@ def build_reference(cut: Image.Image, margin: float = 0.10, side: int = REF_SIDE
     canvas.paste(small, (l, t), small)
     alpha = np.zeros((side, side), np.float32)
     alpha[t:t + nh, l:l + nw] = np.asarray(small.getchannel("A"), np.float32) / 255
-    return Reference(canvas, alpha, rgba, (l, t, l + nw, t + nh))
+    return Reference(canvas, alpha, rgba, (l, t, l + nw, t + nh), open=open_sides(cut))
+
+
+def beyond_open(ref: Reference, fit: "Fit", size: tuple[int, int], inset: float = 0.02) -> np.ndarray:
+    """Output pixels on the far side of the reference's open edges (bool, output size): what the model
+    drew there continues a part the supplier photo cut off, so no reference exists to compare it with.
+    `inset` moves the line a little inwards (share of the product width) so the cut end itself is out too."""
+    W, H = size
+    out = np.zeros((H, W), bool)
+    if not ref.open:
+        return out
+    a, b, c, d, e, f = fit.matrix_inv()
+    xs, ys = np.meshgrid(np.arange(W, dtype=np.float32), np.arange(H, dtype=np.float32))
+    rx, ry = a * xs + b * ys + c, d * xs + e * ys + f   # output pixel -> reference canvas
+    l, t, r, bt = ref.box
+    k = inset * (r - l)
+    for side in ref.open:
+        out |= {"left": rx < l + k, "right": rx > r - k, "top": ry < t + k, "bottom": ry > bt - k}[side]
+    return out
 
 
 # ------------------------------------------------------------------ alignment
@@ -448,13 +510,20 @@ def fidelity_gate(ref: Reference, out: Image.Image, out_alpha: np.ndarray, resto
     recolour (DAB_MAX_RESTORED) rejects; without it the model's colours ship and DAB_MAX applies."""
     H, W = out_alpha.shape
     fit, iou_work = fit_similarity(ref.alpha, out_alpha)
+    open_info: dict[str, Any] = {}
+    if ref.open:  # compare only the part the supplier photo shows (the model completes the rest)
+        for _ in range(2):
+            trimmed = np.where(beyond_open(ref, fit, (W, H)), 0.0, out_alpha).astype(np.float32)
+            fit, iou_work = fit_similarity(ref.alpha, trimmed)
+        out_alpha = np.where(beyond_open(ref, fit, (W, H)), 0.0, out_alpha).astype(np.float32)
+        open_info = {"open": list(ref.open)}
     warped = np.asarray(warp_to(ref.alpha, fit, (W, H)), np.float32) / 255
     width = fit.scale * (ref.box[2] - ref.box[0])
     tol = max(1, round(TOL_FRAC * width))
     iou = tolerant_iou(warped, out_alpha, tol)
     strict = tolerant_iou(warped, out_alpha, 0)
     stats: dict[str, Any] = {"iou": round(iou, 4), "iou_strict": round(strict, 4), "tol_px": tol,
-                             "scale": round(fit.scale, 3), "angle": round(fit.angle, 2)}
+                             "scale": round(fit.scale, 3), "angle": round(fit.angle, 2), **open_info}
     if iou < IOU_MIN:
         return GateReport(False, f"silhouette changed (IoU {iou:.3f} < {IOU_MIN})", fit, stats)
 
@@ -517,7 +586,12 @@ LENS_SMOOTH_GRAD = 2.0     # mean |grad| (grey levels / px) under which a pixel 
 LENS_MIN_AREA = 0.03       # a lens core is at least 3 % of the product area
 LENS_GROW_DE = 14.0        # grow the core into neighbours within this Lab distance of its mean colour
 LENS_GROW_FRAC = 0.02      # ...up to this share of the product width
-LENS_GAIN = 2.2            # strength of the scene seen through (the model's own glass flattens it)
+LENS_GAIN = 1.2            # strength of the scene detail seen through. Was 2.2 until 2026-10-15: on light
+                           # grey glass (Playa Bonita Gris) the amplified linen weave read as holes in the lens
+LENS_DETAIL_FRAC = 0.25    # only scene detail finer than ~1/4 of the lens size passes (radius of the low-pass);
+                           # the model's own tint gradient across the glass must never be re-applied on top of
+                           # the supplier's (gradient lenses came out with a blown, blocky white bottom)
+LENS_BANDS = 3             # the glass is checked in horizontal bands (top/middle/bottom of the gradient)
 LENS_MOD_CLIP = (0.45, 1.8)
 LENS_DAB_MAX = 5.0         # mean a*b* of the restored glass vs the supplier's glass
 LENS_DL_MAX = 8.0          # mean L* of the restored glass vs the opaque restore
@@ -573,6 +647,21 @@ def lens_of(ref: Reference) -> np.ndarray:
     return ref.lens
 
 
+def _box_blur(img: np.ndarray, r: int, passes: int = 3) -> np.ndarray:
+    """Float box blur (radius r, `passes` times ~ a Gaussian) with edge clamping; numpy only."""
+    out = img.astype(np.float32)
+    for _ in range(passes):
+        for axis in (0, 1):
+            n = out.shape[axis]
+            pad = [(0, 0)] * out.ndim
+            pad[axis] = (r + 1, r)
+            c = np.cumsum(np.pad(out, pad, mode="edge"), axis=axis, dtype=np.float64)
+            hi = np.take(c, np.arange(2 * r + 1, 2 * r + 1 + n), axis=axis)
+            lo = np.take(c, np.arange(0, n), axis=axis)
+            out = ((hi - lo) / (2 * r + 1)).astype(np.float32)
+    return out
+
+
 def see_through(relit: np.ndarray, gen: np.ndarray, real_rgb: np.ndarray, lens: np.ndarray,
                 stats: dict[str, Any] | None = None) -> np.ndarray:
     """Restored pixels with the glass made transparent: relit supplier colour x (scene the model
@@ -584,8 +673,15 @@ def see_through(relit: np.ndarray, gen: np.ndarray, real_rgb: np.ndarray, lens: 
         if stats is not None:
             stats["seeThrough"] = info
         return relit
-    behind = gen[region]
-    mod = gen / np.maximum(behind.mean(0), 1.0)
+    # scene DETAIL behind the glass: the model's render relative to the supplier's glass, divided by its
+    # own low-pass inside the glass, so any slow change across the lens (the model's tint gradient vs the
+    # supplier's, its glare) cancels out and only the scene's texture/shadow edges remain
+    ys, xs = np.nonzero(region)
+    rad = max(3, round(LENS_DETAIL_FRAC * float(np.sqrt(region.sum() / 2))))  # ~ a quarter of one lens
+    m = region.astype(np.float32)
+    ratio = gen / np.maximum(real_rgb, 8.0)
+    base = _box_blur(ratio * m[..., None], rad) / np.maximum(_box_blur(m, rad)[..., None], 1e-3)
+    mod = np.where(region[..., None], ratio / np.maximum(base, 1e-3), 1.0)
     # dark tints let less of the scene through (the studio reflection dominates)
     light = float(_lab(real_rgb[region])[:, 0].mean())
     strength = LENS_GAIN * float(np.clip(light / 70.0, 0.35, 1.0))
@@ -597,8 +693,20 @@ def see_through(relit: np.ndarray, gen: np.ndarray, real_rgb: np.ndarray, lens: 
     dab = mean_chroma_shift(real_rgb[region], out[region])
     dab_opaque = mean_chroma_shift(real_rgb[region], relit[region])
     dl = float(abs(_lab(out[region])[:, 0].mean() - _lab(relit[region])[:, 0].mean()))
-    info.update(strength=round(strength, 2), dab=round(dab, 2), dab_opaque=round(dab_opaque, 2), dL=round(dl, 2))
-    if dab > max(LENS_DAB_MAX, dab_opaque + 1.0) or dl > LENS_DL_MAX:
+    # the gradient: every horizontal band of the glass keeps the supplier's lightness and hue
+    lo, hi = int(ys.min()), int(ys.max()) + 1
+    band_dl = 0.0
+    for k in range(LENS_BANDS):
+        rows = np.zeros(region.shape[0], bool)
+        rows[lo + (hi - lo) * k // LENS_BANDS: lo + (hi - lo) * (k + 1) // LENS_BANDS] = True
+        b = region & rows[:, None]
+        if b.sum() < 50:
+            continue
+        band_dl = max(band_dl, float(abs(_lab(out[b])[:, 0].mean() - _lab(relit[b])[:, 0].mean())),
+                      mean_chroma_shift(relit[b], out[b]))
+    info.update(strength=round(strength, 2), dab=round(dab, 2), dab_opaque=round(dab_opaque, 2), dL=round(dl, 2),
+                band_drift=round(band_dl, 2))
+    if dab > max(LENS_DAB_MAX, dab_opaque + 1.0) or dl > LENS_DL_MAX or band_dl > LENS_DL_MAX:
         info["lens"] = "opaque (colour drift)"
         out = relit
     else:
@@ -687,6 +795,25 @@ def to_outputs(img: Image.Image, alpha: np.ndarray, sizes: dict[str, tuple[int, 
         # centre the product vertically, a touch below the middle (room for the scene above)
         top = int(np.clip(cy * rh - 0.55 * h, 0, rh - h))
         out[tag] = big.crop((left, top, left + w, top + h))
+    return out
+
+
+EDGE_MARGIN_MIN = 0.015  # every output keeps the glasses at least 1.5 % of its size away from each edge
+
+
+def edge_margins(img_size: tuple[int, int], alpha: np.ndarray, sizes: dict[str, tuple[int, int]]) -> dict[str, float]:
+    """Smallest distance (share of the side) between the glasses and an edge, per output crop of
+    to_outputs. Zero = the glasses touch or cross the edge ("imagen cortada")."""
+    mask = Image.fromarray(np.uint8(np.clip(alpha, 0, 1) * 255)).convert("RGB").resize(img_size)
+    out: dict[str, float] = {}
+    for tag, im in to_outputs(mask, alpha, sizes).items():
+        m = np.asarray(im.convert("L")) > 127
+        ys, xs = np.nonzero(m)
+        if xs.size == 0:
+            out[tag] = 0.0
+            continue
+        h, w = m.shape
+        out[tag] = round(float(min(xs.min() / w, (w - 1 - xs.max()) / w, ys.min() / h, (h - 1 - ys.max()) / h)), 4)
     return out
 
 

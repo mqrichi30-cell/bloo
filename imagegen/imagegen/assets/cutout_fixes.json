@@ -1,0 +1,101 @@
+{
+ "2085244610103349248": {
+  "note": "Tortuguero Leopardo Te Claro: reflected far temple, from the arm tip down to the bridge + its piece in the nose gap",
+  "size": [
+   1244,
+   539
+  ],
+  "erase": [
+   {
+    "pts": [
+     [
+      693,
+      123
+     ],
+     [
+      539,
+      245
+     ],
+     [
+      522,
+      262
+     ]
+    ],
+    "hw": 22
+   },
+   {
+    "pts": [
+     [
+      366,
+      334
+     ],
+     [
+      345,
+      346
+     ],
+     [
+      306,
+      366
+     ]
+    ],
+    "hw": 15
+   }
+  ],
+  "lens": [],
+  "protect_front_px": 21
+ },
+ "2085244585663139840": {
+  "note": "Tortuguero Leopardo Gris: reflected far temple, from the arm tip to the rim and through the right lens",
+  "size": [
+   1249,
+   529
+  ],
+  "erase": [
+   {
+    "pts": [
+     [
+      726,
+      130
+     ],
+     [
+      578,
+      245
+     ],
+     [
+      558,
+      260
+     ]
+    ],
+    "hw": 22
+   }
+  ],
+  "lens": [
+   {
+    "pts": [
+     [
+      508,
+      274
+     ],
+     [
+      476,
+      298
+     ],
+     [
+      446,
+      316
+     ],
+     [
+      410,
+      334
+     ],
+     [
+      394,
+      346
+     ]
+    ],
+    "hw": 16
+   }
+  ],
+  "protect_front_px": 21
+ }
+}

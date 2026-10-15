@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 
+import numpy as np
 import requests
 from PIL import Image
 
@@ -28,15 +29,17 @@ from .bloo_api import BlooApi, Job
 from .brand import stamp_logo
 from .composite import OUTPUT_SIZES, composite, to_jpeg
 from .cutout import cut_out, load_source, segment_alpha
-from .edit import (EDIT_PROMPTS, GEN_SIZE, build_reference, correction_prompt, fidelity_gate,
-                   gpt_hard_defects, product_fits_square, restore_product, to_outputs)
+from .edit import (EDGE_MARGIN_MIN, EDIT_PROMPTS, GEN_SIZE, beyond_open, build_reference, correction_prompt,
+                   edge_margins, fidelity_gate, gpt_hard_defects, open_edge_prompt, product_fits_square,
+                   restore_product, to_outputs)
 from .platecheck import PlateRejected
 from .plates import PlatePool, local_plate, validate_plate
 from .providers import (CF_NEURON_BUDGET, REVIEW_NEURON_RESERVE, CloudflareEdit, OpenAIEdit, ProviderChain,
                         ProviderError, QuotaExhausted, cf_ledger, openai_daily_cap)
+from .cutout_fixes import apply_fix
 from .qa import run_qa
 from .reflection import duplicate_check, remove_reflection
-from .review import VisionReviewer
+from .review import VisionReviewer, silhouette_check
 from .storage import Storage
 from .story import (STORY_CF_REF, STORY_GEN_SIZE, STORY_LOGO_BOTTOM_FRAC, STORY_SIZE, StoryLayout,
                     build_story_reference, compose_story, place_story_product, plan_story, product_bbox,
@@ -94,11 +97,14 @@ def _edit_reset(editor: CloudflareEdit) -> float:
     return until if until > now_ts() else _next_utc_midnight()
 
 
-def clean_cutout(cut: Image.Image) -> tuple[Image.Image, dict[str, Any]]:
-    """Source fix before the edit: cut away a mirror reflection of the glasses (glossy studio floor)."""
+def clean_cutout(cut: Image.Image, source: str | None = None) -> tuple[Image.Image, dict[str, Any]]:
+    """Source fix before the edit: cut away a mirror reflection of the glasses (glossy studio floor),
+    then the per-source manual fix if any (assets/cutout_fixes.json)."""
     cleaned, info = remove_reflection(cut)
     if info.get("reflection"):
         log.info("source reflection removed (%s)", info)
+    cleaned, fix = apply_fix(cleaned, source)
+    info.update(fix)
     return cleaned, info
 
 
@@ -147,6 +153,10 @@ def edit_scene(cut: Image.Image, variant: str, editor: CloudflareEdit | None,
         att.update(ok=rep.ok, reason=rep.reason, **{k: v for k, v in rep.stats.items() if k not in ("wm", "hand")})
         if rep.ok and not product_fits_square(alpha, OUTPUT_SIZES["1x1"][1] / OUTPUT_SIZES["4x5"][1]):
             att.update(ok=False, reason="product too large for the 1:1 crop")
+        if att["ok"]:
+            sil_ok, sil_reason, att["silhouette"] = silhouette_check(ref.alpha, alpha)
+            if not sil_ok:
+                att.update(ok=False, reason=sil_reason)
         log.info("edit %s seed %d -> %s %s", model, seed, "OK" if att["ok"] else "REJECTED", att["reason"])
         if not att["ok"] or rep.fit is None:
             defects, hint = [str(att["reason"] or "fidelity gate")], ""
@@ -227,8 +237,10 @@ def gpt_scene(cut: Image.Image, gpt: OpenAIEdit, reviewer: VisionReviewer,
     meta: dict[str, Any] = {"provider": gpt.label, "model": gpt.model}
     ref = build_reference(cut)
     big = build_reference(cut, side=GPT_REF_SIDE)
-    try:
-        img, call = gpt.edit(prompt or EDIT_PROMPTS["hero"], big.image, image_id)  # prompt: batch auto-correct
+    if ref.open:
+        meta["open"] = list(ref.open)
+    try:  # prompt: batch auto-correct; open edges: the model completes what the supplier photo cut off
+        img, call = gpt.edit((prompt or EDIT_PROMPTS["hero"]) + open_edge_prompt(ref.open), big.image, image_id)
     except QuotaExhausted as e:
         gpt.mark_exhausted(e.reset_at, str(e))
         meta.update(rejected=True, why=f"quota: {str(e)[:160]}")
@@ -250,6 +262,15 @@ def gpt_scene(cut: Image.Image, gpt: OpenAIEdit, reviewer: VisionReviewer,
     hard = gpt_hard_defects(rep.reason) if not rep.ok else []
     if not hard and not product_fits_square(alpha, OUTPUT_SIZES["1x1"][1] / OUTPUT_SIZES["4x5"][1]):
         hard = ["product too large for the 1:1 crop"]
+    if not hard and rep.fit is not None:
+        sil_alpha = np.where(beyond_open(ref, rep.fit, img.size), 0.0, alpha) if ref.open else alpha
+        sil_ok, sil_reason, meta["silhouette"] = silhouette_check(ref.alpha, sil_alpha)
+        if not sil_ok:
+            hard = [sil_reason]
+    if not hard:
+        meta["margins"] = edge_margins(img.size, alpha, OUTPUT_SIZES)
+        if min(meta["margins"].values()) < EDGE_MARGIN_MIN:
+            hard = ["glasses cropped by the image edge (margin %.3f)" % min(meta["margins"].values())]
     if hard or rep.fit is None:
         hard = hard or ["fidelity gate: no fit"]
         meta.update(rejected=True, hard=hard, why=hard[0])
@@ -296,6 +317,9 @@ def story_frame(img: Image.Image, ref: Any, alpha: Any,
         info["warnings"] = [rep.reason]
     if rep.fit is None:
         return None, info, "fidelity gate: no fit"
+    sil_ok, sil_reason, info["silhouette"] = silhouette_check(ref.alpha, alpha)
+    if not sil_ok:
+        return None, info, sil_reason
     bbox = product_bbox(alpha)
     lay = plan_story(img.size, bbox) if bbox else StoryLayout(False, "no product in render")
     info["layout"] = lay.as_dict()
@@ -468,7 +492,7 @@ def process_job(job: Job, pool: PlatePool, storage: Storage,
     cut, hand = cut_out(src)
     if hand.has_hand:
         return _err("source_has_hand", qa={"local": hand.as_dict()})
-    cut, refl = clean_cutout(cut)
+    cut, refl = clean_cutout(cut, job.source_url)
     if variant == STORY:
         return process_story(job, src, cut, hand.as_dict(), refl, storage, editor, reviewer, gpt, state)
 

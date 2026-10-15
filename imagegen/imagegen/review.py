@@ -20,6 +20,7 @@ import json
 import re
 from typing import Any
 
+import numpy as np
 import requests
 from PIL import Image
 
@@ -49,9 +50,14 @@ Check the OUTPUT against every item:
 5. no hands, fingers or people;
 6. no added text, watermark or logo (the product's own metal hinges/ornaments are fine);
 7. the scene shows {scene};
-8. no melted, warped or broken parts, no extra temple arms or extra lenses.
+8. no melted, warped or broken parts, no extra temple arms or extra lenses; the glasses are COMPLETE: both lenses with their full rims all around (a frame cut in half, e.g. only the top half of the lenses, is warped_or_extra_parts).
+9. count the temple arms (the side arms that go over the ears) of the glasses in the OUTPUT; a real pair has at most 2 (one may be hidden behind the frame);
+10. the lens tint matches the REFERENCE, including any gradient (e.g. dark at the top fading lighter towards the bottom): same colours, same direction, no washed-out, blotchy, pixelated or blocky patches in the lenses;
+11. the WHOLE pair is inside the picture with some margin: no temple tip or rim cut by the image edge, no temple arm that ends abruptly;
+12. clear/transparent parts of the frame and the lenses look intact (not erased, no holes, not replaced by the background texture);
+13. the pose is physically natural: the glasses rest on the surface (or lean on an object) the way real glasses would, nothing hovering or propped impossibly.
 Reply with ONLY a JSON object, no prose, no code fence:
-{{"glasses_count": <integer>, "reflection_or_duplicate": <true|false>, "floating": <true|false>, "matches_reference": <true|false>, "hands_or_people": <true|false>, "added_text_or_logo": <true|false>, "scene_ok": <true|false>, "warped_or_extra_parts": <true|false>, "defects": [<short strings, empty if none>], "pass": <true|false>, "fix_hint": "<one short instruction for the image generator, empty if pass>"}}"""
+{{"glasses_count": <integer>, "temple_arms_count": <integer>, "lens_tint_matches": <true|false>, "fully_in_frame": <true|false>, "clear_parts_intact": <true|false>, "pose_natural": <true|false>, "reflection_or_duplicate": <true|false>, "floating": <true|false>, "matches_reference": <true|false>, "hands_or_people": <true|false>, "added_text_or_logo": <true|false>, "scene_ok": <true|false>, "warped_or_extra_parts": <true|false>, "defects": [<short strings, empty if none>], "pass": <true|false>, "fix_hint": "<one short instruction for the image generator, empty if pass>"}}"""
 
 # field -> (value that PASSES, defect name used when it fails)
 CHECKS: dict[str, tuple[Any, str]] = {
@@ -62,6 +68,11 @@ CHECKS: dict[str, tuple[Any, str]] = {
     "added_text_or_logo": (False, "text_or_logo"),
     "scene_ok": (True, "scene_incomplete"),
     "warped_or_extra_parts": (False, "warped_or_extra_parts"),
+    # owner's rejections of 2026-10-15 (catalog review)
+    "lens_tint_matches": (True, "lens_gradient_differs"),
+    "fully_in_frame": (True, "glasses_cropped"),
+    "clear_parts_intact": (True, "clear_parts_erased"),
+    "pose_natural": (True, "pose_unnatural"),
 }
 
 
@@ -127,6 +138,12 @@ def normalize(raw: dict[str, Any] | None) -> dict[str, Any]:
         n = -1
     if n != 1:
         defects.append(f"glasses_count={count}")
+    arms = raw.get("temple_arms_count")
+    try:
+        if int(arms) > 2:
+            defects.append(f"extra_temple_arm={arms}")
+    except (TypeError, ValueError):
+        defects.append("temple_arms_count=missing")
     for key, (want, name) in CHECKS.items():
         v = _as_bool(raw.get(key))
         if v is None:
@@ -140,7 +157,7 @@ def normalize(raw: dict[str, Any] | None) -> dict[str, Any]:
         defects.append("model_says_fail")
     ok = not defects
     hint = str(raw.get("fix_hint") or "")[:200] if not ok else ""
-    answers = {k: raw.get(k) for k in ("glasses_count", *CHECKS)}
+    answers = {k: raw.get(k) for k in ("glasses_count", "temple_arms_count", *CHECKS)}
     return {"pass": ok, "defects": defects + ([f"model: {'; '.join(extra[:4])}"] if extra and not ok else []),
             "fix_hint": hint, "answers": answers}
 
@@ -222,6 +239,41 @@ class VisionReviewer:
                 log.warning("review model %s failed: %s", model, str(e)[:200])
                 last = e
         raise ProviderError(f"no review model answered: {last}")
+
+
+# ------------------------------------------------------------------ local silhouette check (free)
+# A render can be a faithful copy of a WRONG reference or drop part of the frame (Malinche Te Seco,
+# 2026-10-15: only the top half of the glasses). Before the AI review, the output silhouette is compared
+# with the reference cutout, each normalised to its own bounding box (pose-independent of the gate's fit).
+SIL_SIDE = 96
+SIL_ASPECT_MAX = 1.3   # bbox height/width may differ at most 30 % (half a pair = ~2x)
+SIL_IOU_MIN = 0.6      # IoU of the box-normalised silhouettes (a missing lens rim drops it a lot)
+
+
+def _box_mask(alpha: np.ndarray) -> tuple[np.ndarray, float] | None:
+    m = np.asarray(alpha, np.float32) > 0.5
+    ys, xs = np.nonzero(m)
+    if xs.size < 20:
+        return None
+    t, b, l, r = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
+    box = Image.fromarray(np.uint8(m[t:b, l:r]) * 255).resize((SIL_SIDE, SIL_SIDE), Image.BILINEAR)
+    return np.asarray(box) > 127, (b - t) / (r - l)
+
+
+def silhouette_check(ref_alpha: np.ndarray, out_alpha: np.ndarray) -> tuple[bool, str, dict[str, Any]]:
+    """(ok, defect, stats): the glasses in the output have the reference's silhouette (aspect + shape)."""
+    a, b = _box_mask(ref_alpha), _box_mask(out_alpha)
+    if a is None or b is None:
+        return False, "silhouette_mismatch: no glasses found", {}
+    (ma, ra), (mb, rb) = a, b
+    aspect = max(ra, rb) / max(1e-6, min(ra, rb))
+    iou = float((ma & mb).sum() / max(1, (ma | mb).sum()))
+    stats = {"aspect_ref": round(float(ra), 3), "aspect_out": round(float(rb), 3), "box_iou": round(iou, 3)}
+    if aspect > SIL_ASPECT_MAX:
+        return False, f"silhouette_mismatch: aspect {rb:.2f} vs reference {ra:.2f} (missing part of the glasses?)", stats
+    if iou < SIL_IOU_MIN:
+        return False, f"silhouette_mismatch: shape IoU {iou:.2f} < {SIL_IOU_MIN} (missing lens rim or part?)", stats
+    return True, "", stats
 
 
 def ledger_used(state: dict[str, Any]) -> float:

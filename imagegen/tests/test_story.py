@@ -269,7 +269,7 @@ def job_env(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     hand = mock.Mock(has_hand=False, as_dict=lambda: {})
     monkeypatch.setattr(run, "load_source", lambda url: img)
     monkeypatch.setattr(run, "cut_out", lambda src: (img.convert("RGBA"), hand))
-    monkeypatch.setattr(run, "clean_cutout", lambda cut: (cut, {}))
+    monkeypatch.setattr(run, "clean_cutout", lambda cut, source=None: (cut, {}))
     monkeypatch.setattr(run, "run_qa", lambda a, b: {"skipped": "test"})
     monkeypatch.setattr(run, "composite", mock.Mock(side_effect=AssertionError("story never composites")))
     uploads: list[tuple[str, bytes]] = []

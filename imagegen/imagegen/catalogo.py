@@ -5,6 +5,8 @@ C:\\bloo\\catalogo\\<folder>\\ (gitignored) and ONE PDF C:\\bloo\\catalogo\\cata
 
     python -m imagegen.catalogo                 read DB + Storage, write folders + PDF
     python -m imagegen.catalogo --dry-run       OFFLINE: 3 mock colors -> imagegen/out/catalogo-dry.pdf
+    python -m imagegen.catalogo --estilo completo --nombre catalogo-bloo-parte-2.pdf --solo-models <id> <id>
+                                                only those colors in the PDF (e.g. the redone ones)
 
 Schedule (the robot's queue order): colors NOT yet published get one dated slot per day (CR time)
 starting --start (default 2026-10-15), in the order of their pending 'publicar' tasks, then the
@@ -42,6 +44,7 @@ DIAS = ["lun", "mar", "mié", "jue", "vie", "sáb", "dom"]
 MESES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"]
 FONT_DIR = Path("C:/Windows/Fonts")
 LOGO = Path(__file__).with_name("assets") / "bloo-logo-mask.png"
+SOLO: set[str] = set()  # --solo-models
 
 SQL = """
 SELECT l."id", m."id", m."nombre", COALESCE(m."color", ''), l."status", m."stockQty" - m."stockReservado",
@@ -255,9 +258,14 @@ def full_cover(size: tuple[int, int]) -> Image.Image:
         PAGE = old
 
 
+def has_photo(i: Item) -> bool:
+    return bool(i.files.get("hero-4x5.jpg") or i.files.get("hero.jpg"))
+
+
 def write_pdf(items: list[Item], price: int, path: Path) -> Path:
-    # Solo colores con foto nueva aprobada: sin página vacía mientras se rehace una foto.
-    items = [i for i in items if i.hero and i.hero.get("url")]
+    # Solo colores con la foto realmente descargada: nunca una página vacía ("sin foto nueva"),
+    # ni mientras se rehace una foto ni si la descarga de Storage falló.
+    items = [i for i in items if has_photo(i)]
     if FULL:
         body = [full_page(i, price) for i in items]
         pages = [full_cover(body[0].size if body else PAGE)] + body
@@ -304,8 +312,13 @@ def run_live(start: date) -> int:
     index = [{"folder": i.folder, **manifest(i, price)} for i in items]
     (LOCAL / "schedule.json").write_text(json.dumps(index, indent=1, ensure_ascii=False), encoding="utf-8")
     storage.upload("catalogo/schedule.json", json.dumps(index, indent=1, ensure_ascii=False).encode(), "application/json")
-    pdf = write_pdf(items, price, LOCAL / PDF_NAME)
-    log.info("PDF: %s (%d pages)", pdf, len(items) + 1)
+    # --solo-models: the PDF only (folders and schedule.json always cover every color)
+    pdf_items = [i for i in items if not SOLO or i.model_id in SOLO]
+    pdf = write_pdf(pdf_items, price, LOCAL / PDF_NAME)
+    missing = [f"{i.nombre} · {i.color}" for i in pdf_items if not has_photo(i)]
+    if missing:
+        log.warning("left out of the PDF (no photo downloaded): %s", "; ".join(missing))
+    log.info("PDF: %s (%d colors)", pdf, sum(has_photo(i) for i in pdf_items))
     print(pdf)
     return 0
 
@@ -341,9 +354,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--nombre", default=None, help="nombre del PDF (ej. catalogo-bloo-parte-1.pdf)")
     ap.add_argument("--estilo", choices=["fichas", "completo"], default="fichas",
                     help="completo = una foto por hoja sin marco, precio mínimo en una esquina")
+    ap.add_argument("--solo-models", nargs="+", default=[], metavar="MODEL_ID",
+                    help="el PDF solo con estos colores (Model.id, separados por espacio o coma), ej. una parte 2")
     a = ap.parse_args(argv)
     setup_logging()
-    global PDF_NAME, FULL
+    global PDF_NAME, FULL, SOLO
+    SOLO = {x.strip() for v in a.solo_models for x in v.split(",") if x.strip()}
     FULL = a.estilo == "completo"
     if a.nombre:
         PDF_NAME = a.nombre
