@@ -231,6 +231,8 @@ def color_page(i: Item, price: int, n: int, total: int) -> Image.Image:
 
 
 def write_pdf(items: list[Item], price: int, path: Path) -> Path:
+    # Solo colores con foto nueva aprobada: sin página vacía mientras se rehace una foto.
+    items = [i for i in items if i.hero and i.hero.get("url")]
     pages = [cover(items, price)] + [color_page(i, price, k, len(items)) for k, i in enumerate(items, 1)]
     path.parent.mkdir(parents=True, exist_ok=True)
     pages[0].save(path, "PDF", save_all=True, append_images=pages[1:], resolution=150.0, quality=88)
