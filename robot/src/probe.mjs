@@ -205,3 +205,46 @@ export async function inspectSellingMenu(page, title, outBase) {
   await page.keyboard.press("Escape").catch(() => {});
   log(`inspect_selling_menu: ${items.length} opciones (no se pulsó ninguna)`);
 }
+
+/**
+ * Solo lectura: por cada título (separados por "||") cuenta las tarjetas con "Más opciones para <título>"
+ * EXACTO en Tus publicaciones y, por tarjeta, abre su menú y vuelca opciones + hrefs (no pulsa nada).
+ * @param {import('playwright').Page} page @param {string} titles @param {string} outBase
+ */
+export async function inspectSellingCards(page, titles, outBase) {
+  const out = [];
+  for (const title of titles.split("||").map((t) => t.trim()).filter(Boolean)) {
+    await go(page, `https://www.facebook.com/marketplace/you/selling/?title_search=${encodeURIComponent(title)}`);
+    await page.waitForTimeout(6000);
+    const btns = page.getByRole("button", { name: `Más opciones para ${title}`, exact: true });
+    const n = await btns.count();
+    out.push(`## ${title} → ${n} tarjeta(s)`);
+    for (let k = 0; k < n; k++) {
+      await btns.nth(k).scrollIntoViewIfNeeded({ timeout: 5000 }).catch(() => {});
+      // Estado visible de la tarjeta: botones hermanos con el título (Marcar como agotado/disponible…).
+      const siblings = await btns.nth(k).evaluate((b, t) => {
+        let c = b;
+        for (let i = 0; i < 8 && c.parentElement; i++) c = c.parentElement;
+        return [...c.querySelectorAll('[role="button"],a[href]')]
+          .map((e) => (e.getAttribute("aria-label") || e.textContent || "").replace(/\s+/g, " ").trim())
+          .filter((x) => x.includes(t) || /agotado|disponible|vendido|pendiente/i.test(x))
+          .slice(0, 12);
+      }, title);
+      await btns.nth(k).click();
+      await page.waitForTimeout(2500);
+      const items = await page.evaluate(() =>
+        [...document.querySelectorAll('[role="menuitem"]')].map((e) => {
+          const a = e.closest("a[href]") || e.querySelector("a[href]");
+          return `${(e.textContent || "").replace(/\s+/g, " ").trim()}${a ? ` href=${(a.getAttribute("href") || "").split("?")[0]}` : ""}`;
+        })
+      );
+      out.push(`  [${k}] tarjeta: ${siblings.join(" ; ")}`);
+      out.push(`  [${k}] menú: ${items.join(" | ")}`);
+      await page.keyboard.press("Escape").catch(() => {});
+      await page.waitForTimeout(1200);
+    }
+  }
+  await writeFile(`${outBase}-cards.txt`, out.join("\n"));
+  await page.screenshot({ path: `${outBase}-cards.png`, fullPage: true, timeout: 20_000 }).catch(() => {});
+  log(`inspect_selling_cards: listo (no se pulsó ninguna opción)\n${out.join("\n")}`);
+}
