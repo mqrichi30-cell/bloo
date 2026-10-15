@@ -871,11 +871,75 @@ export async function eliminar(page, task, opts = {}) {
   await go(page, url);
   await assertNoCheckpoint(page);
   if (!(await exact())) throw new Error(`La publicación ${safeUrl(url)} no muestra el título exacto "${title}"; no la toco`);
-  if (opts.dryRun) {
-    if (!(await deleteMenuReachable(page))) throw new Error('No encontré el menú para eliminar');
-    log('dry-run: encontré el menú para eliminar, NO se hizo clic');
-    return { method: "dry-run", url, remaining };
-  }
-  await deleteOpenListing(page);
+  // 2026-10-15: la página del ítem ya no trae menú para eliminar (solo Editar / Compartir /
+  // Marcar como agotado). El camino real es "Tus publicaciones" → "Más opciones para <título>" →
+  // "Eliminar publicación". El título exacto ya se verificó en el ítem; el botón lleva el título
+  // exacto en su nombre accesible.
+  await deleteFromSellingList(page, title, base, { allowMany: matchAll, dryRun: opts.dryRun });
+  if (opts.dryRun) return { method: "dry-run", url, remaining };
   return { method: "eliminado", url, remaining };
+}
+
+const DELETE_ITEM_RE = /^(Eliminar|Borrar) publicaci[oó]n$/i;
+const DELETE_CONFIRM_RE = /^(Eliminar|Borrar|Eliminar publicaci[oó]n|Borrar publicaci[oó]n|Confirmar)$/i;
+
+/**
+ * Botones "Más opciones para <título>" (título EXACTO) en "Tus publicaciones" filtrada; si el filtro no
+ * los muestra, lista completa. @param {Page} page @param {string} title @param {string} base
+ */
+async function openSellingMenuButtons(page, title, base) {
+  for (const filter of [true, false]) {
+    await go(page, sellingUrl(base, title, filter));
+    await assertNoCheckpoint(page);
+    const btns = page.getByRole("button", { name: `Más opciones para ${title}`, exact: true });
+    await btns.first().waitFor({ timeout: 15_000 }).catch(() => {});
+    const n = await btns.count();
+    if (n > 0 || !sellingSearchTerm(title)) return { btns, n };
+  }
+  return { btns: page.getByRole("button", { name: `Más opciones para ${title}`, exact: true }), n: 0 };
+}
+
+/**
+ * Elimina desde "Tus publicaciones" UNA publicación con título EXACTO y verifica que su tarjeta
+ * desapareció. Sin allowMany, si hay más de una tarjeta con ese título → Error (no adivina).
+ * @param {Page} page @param {string} title @param {string} base @param {{allowMany?: boolean, dryRun?: boolean}} [o]
+ */
+export async function deleteFromSellingList(page, title, base, o = {}) {
+  const { btns, n } = await openSellingMenuButtons(page, title, base);
+  if (n === 0) throw new Error(`No encontré "Más opciones para ${title}" en Tus publicaciones`);
+  if (n > 1 && !o.allowMany) throw new Error(`Hay ${n} tarjetas "${title}" en Tus publicaciones; no adivino cuál eliminar`);
+  await btns.first().scrollIntoViewIfNeeded({ timeout: 5000 }).catch(() => {});
+  await pause();
+  await btns.first().click();
+  await pause(800, 1600);
+  const item = await firstVisible(
+    [page.getByRole("menuitem", { name: DELETE_ITEM_RE }), page.getByRole("button", { name: DELETE_ITEM_RE }), page.getByText(DELETE_ITEM_RE)],
+    8000
+  );
+  if (!item) throw new Error('No encontré "Eliminar publicación" en el menú de la tarjeta');
+  if (o.dryRun) {
+    log('dry-run: encontré "Eliminar publicación", NO se hizo clic');
+    await page.keyboard.press("Escape").catch(() => {});
+    return;
+  }
+  await item.click();
+  await pause(1200, 2400);
+  let confirmed = false;
+  for (let i = 0; i < 3; i++) {
+    const dlg = page.getByRole("dialog");
+    const btn = await firstVisible([dlg.getByRole("button", { name: DELETE_CONFIRM_RE })], i === 0 ? 8000 : 2500);
+    if (!btn) break;
+    await btn.click();
+    confirmed = true;
+    await pause(1500, 3000);
+  }
+  if (!confirmed) throw new Error("No apareció la confirmación de eliminar");
+  await assertNoCheckpoint(page);
+  // Verificación: una tarjeta menos con ese título (Facebook puede tardar: hasta 3 recargas).
+  for (let i = 0; i < 3; i++) {
+    const after = await openSellingMenuButtons(page, title, base);
+    if (after.n < n) return;
+    await pause(3000, 6000);
+  }
+  throw new Error(`Pulsé eliminar pero "${title}" sigue en Tus publicaciones (${n} tarjeta(s))`);
 }

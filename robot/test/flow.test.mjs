@@ -55,12 +55,16 @@ const resetListings = () => {
 };
 
 // Dos formatos de tarjeta: título dentro del <a>, o al lado (imagen enlazada + <span> hermano).
+// Como en Facebook (2026-10-15): cada tarjeta trae "Más opciones para <título>" → "Eliminar publicación".
+const moreBtn = (id, title) =>
+  `<div role="button" tabindex="0" aria-label="Más opciones para ${title}" onclick="event.stopPropagation();openMenu('${id}')">…</div>`;
 const card = (id, title, i) =>
-  DIALOG_CARDS.has(id)
+  (DIALOG_CARDS.has(id)
     ? `<div class="card" role="button" tabindex="0" onclick="openDlg('${id}')"><img alt=""><div><span>${title}</span></div><span>₡15.000</span></div>`
     : i % 2
     ? `<div class="card"><a href="/marketplace/item/${id}/?ref=selling"><span>${title}</span><span>₡15.000</span></a></div>`
-    : `<div class="card"><a href="/marketplace/item/${id}/?ref=selling" aria-label="foto"><img alt=""></a><div><span>${title}</span></div><span>₡15.000</span></div>`;
+    : `<div class="card"><a href="/marketplace/item/${id}/?ref=selling" aria-label="foto"><img alt=""></a><div><span>${title}</span></div><span>₡15.000</span></div>`
+  ).replace(/<\/div>$/, `${moreBtn(id, title)}</div>`);
 const sellingHtml = (q = "") => {
   const shown = [...listings].filter(([, t]) => !q || t.toLowerCase().includes(q.toLowerCase()));
   return `<!doctype html><html lang="es"><body><h1>Tus publicaciones</h1><div class="grid">${shown
@@ -69,22 +73,25 @@ const sellingHtml = (q = "") => {
 ${bannerId ? `<div class="promo"><span>Promociona tu publicación</span><a href="/marketplace/item/${bannerId}/">Ver</a></div>` : ""}
 <script>
 const T=${JSON.stringify(Object.fromEntries(listings))};
+let pick=null;
+function openMenu(id){pick=id;document.getElementById("cm").hidden=false}
+function delPick(){document.getElementById("cm").hidden=true;document.getElementById("cd").hidden=false}
+function okDel(){document.getElementById("cd").hidden=true;fetch('/__deleted/'+pick,{method:'POST'})}
 function openDlg(id){const d=document.createElement("div");d.setAttribute("role","dialog");
 d.innerHTML='<h2>Tu publicación</h2><span></span><a href="/marketplace/item/'+id+'/">Ver publicación</a>';
 d.querySelector("span").textContent=T[id];document.body.appendChild(d);}
-</script></body></html>`;
+</script>
+<div role="menu" id="cm" hidden><div role="menuitem">Ver publicación</div><div role="menuitem" onclick="delPick()">Eliminar publicación</div></div>
+<div role="dialog" id="cd" hidden><span>¿Eliminar esta publicación?</span><div role="button" tabindex="0" onclick="okDel()">Eliminar</div></div>
+</body></html>`;
 };
 const itemHtml = (id) => `<!doctype html><html lang="es"><body><h1><span>${listings.get(id) || "?"}</span></h1>
 <button id="m">${sold.includes(id) ? "Marcar como disponible" : "Marcar como agotado"}</button>
 <div role="dialog" id="d" hidden><p>¿Marcar como agotado?</p><button id="c">Confirmar</button></div>
-<button aria-label="Más opciones" id="mas">…</button>
-<div role="menu" id="menu" hidden><div role="menuitem" id="del">Eliminar publicación</div></div>
-<div role="dialog" id="dd" hidden><p>¿Eliminar publicación?</p><button id="ok">Eliminar</button></div>
+<button>Editar</button><button aria-label="Compartir">↗</button>
 <script>
 m.onclick=()=>{d.hidden=false};
-mas.onclick=()=>{menu.hidden=false};
-del.onclick=()=>{menu.hidden=true; dd.hidden=false};
-ok.onclick=()=>{dd.remove(); fetch('/__deleted/${id}',{method:'POST'})};
+
 c.onclick=()=>{d.remove(); m.textContent='Marcar como disponible'; fetch('/__sold/${id}',{method:'POST'})};
 window.ITEM_ID=${JSON.stringify(id)}; window.BOOST_SCENARIO=${JSON.stringify(boostScenario)};
 </script>
