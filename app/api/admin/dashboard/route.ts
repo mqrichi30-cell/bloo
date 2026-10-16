@@ -14,6 +14,7 @@ import {
   summarizeVentas,
   summarizeGastos,
   summarizeCogs,
+  summarizeParesVendidos,
   buildBarBuckets,
   buildRankingByModel,
   getCostoUnitarioPorSku,
@@ -123,8 +124,9 @@ export async function GET(request: Request) {
 
   const barBuckets = buildBarBuckets(sales, lotes, tipoCambioUsdCent, mode, year, month);
   const ranking = await buildRankingByModel(saleItems);
-  // Pares vendidos = SUM(SaleItem.cantidad) del período (unidades, no tickets).
-  const unidadesVendidas = saleItems.reduce((sum, i) => sum + i.cantidad, 0);
+  // Pares vendidos = SUM(SaleItem.cantidad) de modelos tipo 'lente' del período.
+  // Estuches y accesorios no son pares (ver summarizeParesVendidos).
+  const unidadesVendidas = summarizeParesVendidos(saleItems);
 
   return NextResponse.json({
     period: { mode, year, month },

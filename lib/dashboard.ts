@@ -58,13 +58,24 @@ interface SaleItemForCalc {
   cantidad: number;
   /** COGS de la línea al costo POR SKU vigente al vender (SaleItem, inmutable). */
   cogsLineCent: number;
+  /** "lente" | "accesorio" | "optico" (Model.tipo). Decide qué cuenta como par. */
+  model: { tipo: string };
 }
 
 export async function loadSaleItemsInRange(range: PeriodRange): Promise<SaleItemForCalc[]> {
   return prisma.saleItem.findMany({
     where: whereItemDeVentaEnRango(range.start, range.end),
-    select: { modelId: true, cantidad: true, cogsLineCent: true },
+    select: { modelId: true, cantidad: true, cogsLineCent: true, model: { select: { tipo: true } } },
   });
+}
+
+/**
+ * Pares vendidos = unidades de LENTES del período. Un estuche, paño o accesorio
+ * NO es un par: un ticket de lentes + estuche son 1 par. Ver docs/METAS_UMBRALES.md
+ * (la métrica pública de /socios cuenta lo mismo: solo pares de lentes).
+ */
+export function summarizeParesVendidos(saleItems: SaleItemForCalc[]): number {
+  return saleItems.reduce((sum, i) => (i.model.tipo === "lente" ? sum + i.cantidad : sum), 0);
 }
 
 // Un lote es gasto reconocido en `Lote.fecha` (fecha de COMPRA), no en la
