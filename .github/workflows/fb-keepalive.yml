@@ -1,0 +1,43 @@
+# Keep-alive diario de la sesión de Facebook del robot (robot/keepalive.mjs).
+# Solo abre facebook.com con la sesión guardada y revisa que siga viva; no publica nada.
+# Si Facebook pide login/checkpoint, el job falla (exit 3) y GitHub avisa por correo.
+# Secret: FB_STORAGE_STATE_B64 (se renueva con robot/capture-session.mjs). Nunca se imprime.
+name: fb-keepalive
+
+on:
+  schedule:
+    # 14:05 UTC = 08:05 hora Costa Rica, todos los días.
+    - cron: "5 14 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fb-keepalive
+  cancel-in-progress: false
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: robot/package-lock.json
+
+      - name: Install robot deps
+        working-directory: robot
+        run: npm ci --no-audit --no-fund
+
+      - name: Check Facebook session
+        working-directory: robot
+        env:
+          FB_STORAGE_STATE_B64: ${{ secrets.FB_STORAGE_STATE_B64 }}
+        run: node keepalive.mjs
