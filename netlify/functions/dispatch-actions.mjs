@@ -6,7 +6,7 @@
 //  - robot de Marketplace: solo si el servidor dice due=true y no está pausado.
 //    `lane`: 'rapida' (reemplazar/quitar, ~1/h cuando está libre) o 'diaria'
 //    (publicar nuevo, 7am CR). El servidor vuelve a validar el ritmo en /api/robot/next.
-//  - fotos (imagegen): en horas UTC pares, solo si hay imágenes pendientes.
+//  - fotos y historias (imagegen): cada hora, solo si hay imágenes pendientes.
 //
 // GH_DISPATCH_TOKEN: token fine-grained limitado al repo bloo, Actions: write.
 const REPO = "mqrichi30-cell/bloo";
@@ -51,7 +51,7 @@ export default async () => {
     log.push(`robot: error ${e.message}`);
   }
   try {
-    if (new Date().getUTCHours() % 2 === 0) {
+    {
       const img = await getJson(`${base}/api/imagegen/pending-count`, secret);
       const n = img.pending ?? img.count ?? 0;
       log.push(n > 0 ? `imagegen: ${n} pendientes, dispatch ${await dispatch("imagegen.yml", token, {})}` : "imagegen: nada pendiente");
