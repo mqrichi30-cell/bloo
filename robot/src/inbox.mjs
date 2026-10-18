@@ -22,9 +22,10 @@ import { log, pause } from "./util.mjs";
 
 export const BLOO_PREFIX = "Lentes de sol bloo";
 export const REPLY_TEXT =
-  "¡Hola! 😊 Gracias por escribirle a bloo. Sí, todavía está disponible. Para atenderte más rápido, escríbenos por WhatsApp al 8943-3677 (wa.me/50689433677) y coordinamos la entrega o el envío. Las fotos de la publicación son de referencia: con gusto te enviamos fotos reales y te mostramos todos los estilos que tenemos. ¡Que tengas un lindo día!";
+  "Hola! Esperamos que estés muy bien. Es un gusto saludarte. 😎 Te atiende Cristhofer Marín 👋🏻 Sí, están disponibles, te adjuntamos el catálogo por si gustas ver otros estilos: https://drive.google.com/file/d/1I2z1HBk1dfHIne_l2C28-GQZEJuTP5q3/view?usp=drivesdk Todos nuestros estilos incluyen: - Protección UV400 - Estuche Bloo con pañito de micro fibra 🚫 No hay lentes de acrílico, todos son de acetato o termoplastico para garantizar una sensación lujosa y de calidad. El precio de cada par viene en la esquina inferior derecha. Quedamos atentos a cualquier consulta 😌";
 // Firma para contar nuestra respuesta en el hilo (robusta a emoji/espacios que Messenger reescriba).
-const REPLY_MARK = "Gracias por escribirle a bloo";
+// Marcas de respuestas ya enviadas (la vieja y la actual): una conversación con cualquiera de ellas ya tiene respuesta.
+const REPLY_MARKS = ["Te atiende Cristhofer Marín", "Gracias por escribirle a bloo"];
 const SELLER = /^(Tú|You)$/;
 const ROW_PREFIX = /^(Chat en grupo|Chat de grupo|Group chat): /;
 const MSG_RE = /^Presionar Enter, Mensaje enviado (.+?) por ([^:]+?): ([\s\S]*)$/;
@@ -87,7 +88,7 @@ export function decideThread(t) {
 
 /** Cuántas veces está nuestra respuesta (mensajes del vendedor con la firma). @param {string[]} labels */
 export function countReplies(labels) {
-  return parseMessages(labels).filter((m) => m.seller && normText(m.text).includes(REPLY_MARK)).length;
+  return parseMessages(labels).filter((m) => m.seller && REPLY_MARKS.some((mk) => normText(m.text).includes(mk))).length;
 }
 
 /**
